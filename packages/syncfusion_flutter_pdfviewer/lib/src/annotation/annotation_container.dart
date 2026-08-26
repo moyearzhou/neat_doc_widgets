@@ -59,7 +59,7 @@ class AnnotationContainer extends StatefulWidget {
   final VoidCallback? onDragEnd;
 
   /// Called when the tap is done.
-  final Function(Offset) onTap;
+  final Function(PointerEvent) onTap;
 
   final bool isZooming;
 
@@ -97,7 +97,7 @@ class _AnnotationContainerState extends State<AnnotationContainer> {
         }
         return Listener(
           onPointerUp: (PointerUpEvent details) {
-            widget.onTap(details.position);
+            widget.onTap(details);
           },
           child: Stack(
             children: <Widget>[

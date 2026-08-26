@@ -44,7 +44,6 @@ class StickyNoteEditText extends StatefulWidget {
 
 class _StickyNoteEditTextState extends State<StickyNoteEditText> {
   bool _isEditing = false;
-  bool _isNewAnnotation = false;
   late TextEditingController _controller;
   late FocusNode _focusNode;
   bool _canEdit = true;
@@ -52,7 +51,7 @@ class _StickyNoteEditTextState extends State<StickyNoteEditText> {
 
   @override
   void initState() {
-    _isEditing = _isNewAnnotation = widget.isNewAnnotation;
+    _isEditing = widget.isNewAnnotation;
     _controller = TextEditingController(text: widget.stickyNote.text);
     _focusNode = FocusNode();
     _canEdit = widget.stickyNote.canEdit;
@@ -149,12 +148,7 @@ class _StickyNoteEditTextState extends State<StickyNoteEditText> {
                             _focusNode.requestFocus();
                           } else {
                             if (_controller.text != widget.stickyNote.text) {
-                              if (_isNewAnnotation) {
-                                widget.stickyNote.setText(_controller.text);
-                                _isNewAnnotation = false;
-                              } else {
-                                widget.stickyNote.text = _controller.text;
-                              }
+                              widget.stickyNote.text = _controller.text;
                             }
                             setState(() {
                               _isEditing = false;

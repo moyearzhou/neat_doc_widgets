@@ -923,16 +923,24 @@ class SinglePageViewState extends State<SinglePageView> {
   }
 
   void _handleDragUpdate(DragUpdateDetails details) {
+    final RenderObject? renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox) {
+      return;
+    }
+    final Offset localPosition = renderObject.globalToLocal(
+      details.globalPosition,
+    );
+
     int pageNumber = 0;
     if (widget.scrollDirection == PdfScrollDirection.horizontal) {
-      _scrollHeadPosition = details.localPosition.dx;
+      _scrollHeadPosition = localPosition.dx;
       pageNumber =
           (_scrollHeadPosition /
                   (widget.viewportDimension.width - _kPdfScrollHeadSize) *
                   widget.pdfViewerController.pageCount)
               .round();
     } else {
-      _scrollHeadPosition = details.localPosition.dy;
+      _scrollHeadPosition = localPosition.dy;
       pageNumber =
           (_scrollHeadPosition /
                   (widget.viewportDimension.height - _kPdfScrollHeadSize) *

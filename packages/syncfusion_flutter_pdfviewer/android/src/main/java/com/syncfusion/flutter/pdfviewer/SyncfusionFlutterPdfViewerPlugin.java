@@ -58,6 +58,9 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
             case "initializePdfRenderer":
                 initializePdfRenderer(call, result);
                 break;
+            case "loadPdfFromFile":
+                loadPdfFromFile(call, result);
+                break;
             case "getPagesWidth":
                 getPagesWidth(call, result);
                 break;
@@ -157,6 +160,35 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
                 documentRepo.put(documentID, fileRenderer);
                 int pageCount = renderer.getPageCount();
                 file.delete();
+                result.success(String.valueOf(pageCount));
+            } catch (SecurityException e) {
+                result.error("PASSWORD_ERROR", "Incorrect password or document is encrypted", null);
+            } catch (Exception e) {
+                result.error("PDF_RENDERER_ERROR", e.getMessage(), null);
+            }
+        });
+    }
+
+    private void loadPdfFromFile(MethodCall call, Result result) {
+        executorService.execute(() -> {
+            String path = call.argument("path");
+            String documentID = call.argument("documentID");
+            String password = call.argument("password");
+
+            try {
+                File file = new File(path);
+                ParcelFileDescriptor fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+                PdfRenderer renderer;
+
+                if (Build.VERSION.SDK_INT >= 35 && password != null) {
+                        renderer = createPdfRendererWithPassword(fileDescriptor, password);
+                } else {
+                        renderer = new PdfRenderer(fileDescriptor);
+                }
+
+                PdfFileRenderer fileRenderer = new PdfFileRenderer(fileDescriptor, renderer);
+                documentRepo.put(documentID, fileRenderer);
+                int pageCount = renderer.getPageCount();
                 result.success(String.valueOf(pageCount));
             } catch (SecurityException e) {
                 result.error("PASSWORD_ERROR", "Incorrect password or document is encrypted", null);

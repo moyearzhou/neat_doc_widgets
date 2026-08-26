@@ -290,8 +290,6 @@ class PdfPageViewState extends State<PdfPageView> {
 
   @override
   void dispose() {
-    PaintingBinding.instance.imageCache.clear();
-    PaintingBinding.instance.imageCache.clearLiveImages();
     clearPageImage(dispose: true);
     focusNode.dispose();
     _pdfViewerThemeData = null;
@@ -318,11 +316,6 @@ class PdfPageViewState extends State<PdfPageView> {
             : 0.0;
     if (_pdfPage != null) {
       _calculateHeightPercentage();
-      if (!kIsDesktop) {
-        PaintingBinding.instance.imageCache.clear();
-        PaintingBinding.instance.imageCache.clearLiveImages();
-      }
-
       final Widget pdfPage = Container(
         height: widget.height + heightSpacing,
         width: widget.width + widthSpacing,
@@ -536,7 +529,7 @@ class PdfPageViewState extends State<PdfPageView> {
                     }
 
                     widget.onPdfPagePointerUp(details);
-                    _onPageTapped(details.localPosition);
+                    _onPageTapped(details);
                     if (_interactionMode == PdfInteractionMode.pan) {
                       _cursor = SystemMouseCursors.grab;
                     }
@@ -665,20 +658,23 @@ class PdfPageViewState extends State<PdfPageView> {
                         setState(() {
                           if (canvasRenderBox != null &&
                               widget.pdfPages.isNotEmpty) {
+                            final Offset localPosition =
+                                _globalToLocal(details.position) ??
+                                details.localPosition;
                             final Annotation? annotation = canvasRenderBox!
                                 .findAnnotation(
-                                  details.localPosition,
+                                  localPosition,
                                   widget.pageIndex + 1,
                                 );
                             if (_interactionMode ==
                                 PdfInteractionMode.selection) {
                               final bool isText =
                                   canvasRenderBox!.findTextWhileHover(
-                                    details.localPosition,
+                                    localPosition,
                                   ) !=
                                   null;
                               final bool isTOC = canvasRenderBox!.findTOC(
-                                details.localPosition,
+                                localPosition,
                               );
                               if (isTOC) {
                                 _cursor = SystemMouseCursors.click;
@@ -695,7 +691,7 @@ class PdfPageViewState extends State<PdfPageView> {
                               }
                             } else {
                               final bool isTOC = canvasRenderBox!.findTOC(
-                                details.localPosition,
+                                localPosition,
                               );
                               if (isTOC) {
                                 _cursor = SystemMouseCursors.click;
@@ -737,7 +733,7 @@ class PdfPageViewState extends State<PdfPageView> {
                       });
                     }
                     widget.onPdfPagePointerUp(details);
-                    _onPageTapped(details.localPosition);
+                    _onPageTapped(details);
                   },
                   child:
                       widget.isAndroidTV
@@ -1017,12 +1013,29 @@ class PdfPageViewState extends State<PdfPageView> {
     return comp.future;
   }
 
-  void _onPageTapped(Offset position) {
+  void _onPageTapped(PointerEvent event) {
+    final Offset localPosition =
+        _globalToLocal(event.position) ?? event.localPosition;
     // Tranform the page coordinates from calculated page size to original page size.
-    final double x = position.dx * _heightPercentage;
-    final double y = position.dy * _heightPercentage;
+    final double x = localPosition.dx * _heightPercentage;
+    final double y = localPosition.dy * _heightPercentage;
     final Offset pagePosition = Offset(x, y);
     widget.onTap(pagePosition, widget.pageIndex);
+  }
+
+  Offset? _globalToLocal(Offset globalPosition) {
+    if (!mounted || !context.mounted) {
+      return null;
+    }
+    final RenderObject? renderObject =
+        _canvasKey.currentContext?.findRenderObject();
+    if (renderObject is RenderBox &&
+        renderObject.attached &&
+        renderObject.hasSize) {
+      return renderObject.globalToLocal(globalPosition);
+    } else {
+      return null;
+    }
   }
 
   /// Get the tile image
@@ -1173,15 +1186,14 @@ class PdfPageViewState extends State<PdfPageView> {
 
   /// Clear the page image
   void clearPageImage({bool dispose = false}) {
+    final bool hasImage = _pdfPage != null || _tileImage != null;
     _pdfPage?.image?.dispose();
     _tileImage?.image?.dispose();
-    if (!dispose) {
-      if (mounted) {
-        setState(() {
-          _pdfPage = null;
-          _tileImage = null;
-        });
-      }
+    if (!dispose && hasImage && mounted) {
+      setState(() {
+        _pdfPage = null;
+        _tileImage = null;
+      });
     } else {
       _pdfPage = null;
       _tileImage = null;

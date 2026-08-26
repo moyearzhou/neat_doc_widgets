@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_pdfviewer_platform_interface/pdfviewer_platform_interface.dart';
@@ -10,6 +13,7 @@ class PdfViewerPlugin {
   List<dynamic>? _originalHeight;
   List<dynamic>? _originalWidth;
   String? _documentID;
+  String? _tempFilePath;
 
   /// Initialize the PDF renderer.
   Future<int> initializePdfRenderer(
@@ -17,8 +21,28 @@ class PdfViewerPlugin {
     String? password,
   ) async {
     _documentID = const Uuid().v1();
-    final String? pageCount = await PdfViewerPlatform.instance
-        .initializePdfRenderer(documentBytes, _documentID!, password);
+    String? pageCount;
+    if (_documentID != null) {
+      if (kIsWeb) {
+        pageCount = await PdfViewerPlatform.instance.initializePdfRenderer(
+          documentBytes,
+          _documentID!,
+          password,
+        );
+      } else {
+        final tempDirectory = await Directory.systemTemp.createTemp('pdf_');
+        final tempFile = File(
+          '${tempDirectory.path}${Platform.pathSeparator}${_documentID!}.pdf',
+        );
+        await tempFile.writeAsBytes(documentBytes, flush: true);
+        _tempFilePath = tempFile.path;
+        pageCount = await PdfViewerPlatform.instance.loadPdfFromFile(
+          tempFile.path,
+          _documentID!,
+          password,
+        );
+      }
+    }
     _pageCount = int.parse(pageCount!);
     return _pageCount;
   }
@@ -48,9 +72,16 @@ class PdfViewerPlugin {
     if (_documentID != null) {
       await PdfViewerPlatform.instance.closeDocument(_documentID!);
     }
+    if (!kIsWeb && _tempFilePath != null) {
+      final file = File(_tempFilePath!);
+      if (file.existsSync()) {
+        file.deleteSync();
+      }
+    }
     _pageCount = 0;
     _originalWidth = null;
     _originalHeight = null;
+    _tempFilePath = null;
   }
 }
 

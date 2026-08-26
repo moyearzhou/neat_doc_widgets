@@ -17,7 +17,7 @@ class TextExtractionEngine {
   late final StreamQueue<dynamic> _receiveQueue = StreamQueue<dynamic>(
     _receivePort,
   );
-  Map<int, String> _textMap = <int, String>{};
+  final Map<int, String> _textMap = <int, String>{};
 
   /// Extracts all the text from the PDF document.
   Future<Map<int, String>> extractText() async {
@@ -27,7 +27,17 @@ class TextExtractionEngine {
         _sendPort = await _receiveQueue.next;
       }
       _sendPort!.send(_document);
-      _textMap = await _receiveQueue.next;
+      const int batchSize = 30;
+      final int pageCount = _document.pages.count;
+
+      for (int start = 0; start < pageCount; start += batchSize) {
+        final int end = (start + batchSize - 1).clamp(0, pageCount - 1);
+        _sendPort!.send({'start': start, 'end': end});
+        final dynamic message = await _receiveQueue.next;
+        if (message is Map<int, String>) {
+          _textMap.addAll(message);
+        }
+      }
       _isolate?.kill();
       return _textMap;
     } catch (e) {
@@ -49,15 +59,26 @@ void _extractText(SendPort sendPort) {
   final ReceivePort receivePort = ReceivePort();
   sendPort.send(receivePort.sendPort);
 
+  PdfDocument? document;
+  PdfTextExtractor? textExtractor;
   receivePort.listen((dynamic message) {
     if (message is PdfDocument) {
+      // First message: receive the document
+      document = message;
+      if (document != null) {
+        textExtractor = PdfTextExtractor(document!);
+      }
+      return;
+    } else if (textExtractor != null && message is Map<String, int>) {
+      final int? startIndex = message['start'];
+      final int? endIndex = message['end'];
+      if (startIndex == null || endIndex == null) {
+        return;
+      }
       final Map<int, String> textMap = <int, String>{};
-      final PdfTextExtractor textExtractor = PdfTextExtractor(message);
-      final int pageCount = message.pages.count;
-
-      for (int i = 0; i < pageCount; i++) {
+      for (int i = startIndex; i <= endIndex; i++) {
         final String text =
-            textExtractor
+            textExtractor!
                 .extractText(startPageIndex: i)
                 // Remove the new line characters.
                 .replaceAll(RegExp(r'\r?\n'), '')
