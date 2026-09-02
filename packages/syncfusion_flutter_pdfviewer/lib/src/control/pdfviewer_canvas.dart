@@ -2875,6 +2875,7 @@ class CanvasRenderBox extends RenderBox {
             selectionTheme.selectionHandleColor ?? cupertinoTheme.primaryColor;
         break;
       case TargetPlatform.android:
+      case TargetPlatform.ohos:
       case TargetPlatform.fuchsia:
       case TargetPlatform.linux:
       case TargetPlatform.windows:

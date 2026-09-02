@@ -954,11 +954,15 @@ class PdfPageViewState extends State<PdfPageView> {
             _createImage(pageImage, _imageWidth, _imageHeight).then((
               ui.Image image,
             ) {
-              if (mounted) {
-                setState(() {
-                  _pdfPage = RawImage(image: image, fit: BoxFit.fill);
-                });
+              if (!mounted) {
+                image.dispose();
+                return;
               }
+              final ui.Image? previousImage = _pdfPage?.image;
+              setState(() {
+                _pdfPage = RawImage(image: image, fit: BoxFit.fill);
+              });
+              _disposeImageAfterFrame(previousImage);
             });
           }
         });
@@ -1138,27 +1142,31 @@ class PdfPageViewState extends State<PdfPageView> {
                 tileImageSize.width.toInt(),
                 tileImageSize.height.toInt(),
               ).then((ui.Image image) {
-                if (mounted) {
-                  setState(() {
-                    _tileImageCache = TileImage(
-                      widget.pageIndex,
-                      tileImage,
-                      Rect.fromLTWH(
-                        exposed.left / zoomLevel,
-                        exposed.top / zoomLevel,
-                        exposed.width / zoomLevel,
-                        exposed.height / zoomLevel,
-                      ),
-                      tileImageSize,
-                    );
-                    _tileImage = RawImage(
-                      image: image,
-                      width: tileImageSize.width,
-                      height: tileImageSize.height,
-                      fit: BoxFit.fill,
-                    );
-                  });
+                if (!mounted) {
+                  image.dispose();
+                  return;
                 }
+                final ui.Image? previousImage = _tileImage?.image;
+                setState(() {
+                  _tileImageCache = TileImage(
+                    widget.pageIndex,
+                    tileImage,
+                    Rect.fromLTWH(
+                      exposed.left / zoomLevel,
+                      exposed.top / zoomLevel,
+                      exposed.width / zoomLevel,
+                      exposed.height / zoomLevel,
+                    ),
+                    tileImageSize,
+                  );
+                  _tileImage = RawImage(
+                    image: image,
+                    width: tileImageSize.width,
+                    height: tileImageSize.height,
+                    fit: BoxFit.fill,
+                  );
+                });
+                _disposeImageAfterFrame(previousImage);
               });
             }
           });
@@ -1182,6 +1190,14 @@ class PdfPageViewState extends State<PdfPageView> {
         _pageImageOperation = null;
       });
     });
+  }
+
+  void _disposeImageAfterFrame(ui.Image? image) {
+    if (image == null) {
+      return;
+    }
+    // The old RawImage can remain paintable until this state's next rebuild.
+    WidgetsBinding.instance.addPostFrameCallback((_) => image.dispose());
   }
 
   /// Clear the page image

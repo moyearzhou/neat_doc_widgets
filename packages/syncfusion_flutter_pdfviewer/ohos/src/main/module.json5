@@ -1,0 +1,10 @@
+{
+  "module": {
+    "name": "syncfusion_flutter_pdfviewer",
+    "type": "har",
+    "deviceTypes": [
+      "default",
+      "tablet"
+    ]
+  }
+}

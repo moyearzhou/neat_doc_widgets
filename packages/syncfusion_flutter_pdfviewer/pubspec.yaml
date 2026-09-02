@@ -35,6 +35,8 @@ flutter:
       android:
         package: com.syncfusion.flutter.pdfviewer
         pluginClass: SyncfusionFlutterPdfViewerPlugin
+      ohos:
+        pluginClass: SyncfusionFlutterPdfViewerPlugin
       ios:
         pluginClass: SyncfusionFlutterPdfViewerPlugin
       web:

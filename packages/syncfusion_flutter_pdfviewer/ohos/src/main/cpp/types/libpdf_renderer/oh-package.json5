@@ -1,0 +1,6 @@
+{
+  "name": "libpdf_renderer.so",
+  "version": "1.0.0",
+  "description": "Native PDFium tile renderer types",
+  "types": "./index.d.ts"
+}

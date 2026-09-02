@@ -1,0 +1,12 @@
+{
+  "name": "syncfusion_flutter_pdfviewer",
+  "version": "1.0.0",
+  "description": "Please describe the basic information.",
+  "main": "index.ets",
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@ohos/flutter_ohos": "file:libs/flutter.har",
+    "libpdf_renderer.so": "file:./src/main/cpp/types/libpdf_renderer"
+  }
+}
