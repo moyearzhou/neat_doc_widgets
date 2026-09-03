@@ -15,8 +15,8 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 export class LogUtil {
-  public static readonly DOMAIN: number = 0xFF0000;
-  public static readonly TAG: string = 'SyncfusionFlutterPdfViewerPlugin::';
+  public static readonly DOMAIN: number = 0xFF00;
+  public static readonly TAG: string = 'SyncfusionPdfViewer';
   public static ON: boolean = true
   public static OFF: boolean = false
   public static mLogLevel:boolean = LogUtil.ON

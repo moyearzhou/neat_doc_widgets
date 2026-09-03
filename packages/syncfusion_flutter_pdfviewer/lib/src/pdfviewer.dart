@@ -8,6 +8,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_core/localizations.dart';
 import 'package:syncfusion_flutter_core/theme.dart';
@@ -4076,21 +4077,41 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     if (_pdfPages.isEmpty) {
       return;
     }
+    final bool traceOhos =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.ohos;
+    final bool semanticsEnabled = SemanticsBinding.instance.semanticsEnabled;
+    final bool shouldExtractPageText = !traceOhos || semanticsEnabled;
+    final Stopwatch? checkStopwatch = traceOhos ? (Stopwatch()..start()) : null;
+    int textExtractCount = 0;
+    int clearCount = 0;
+    int pageRequestCount = 0;
     _renderedImages.clear();
     final double zoomLevel = _transformationController.value[0];
     if (widget.pageLayoutMode == PdfPageLayoutMode.single) {
-      if (!_pageTextExtractor.containsKey(
-        _pdfViewerController.pageNumber - 1,
-      )) {
+      if (shouldExtractPageText &&
+          !_pageTextExtractor.containsKey(
+            _pdfViewerController.pageNumber - 1,
+          )) {
+        final Stopwatch? textStopwatch =
+            traceOhos ? (Stopwatch()..start()) : null;
         _pageTextExtractor[_pdfViewerController.pageNumber -
             1] = _pdfTextExtractor!.extractText(
           startPageIndex: _pdfViewerController.pageNumber - 1,
         );
+        textExtractCount++;
+        if (textStopwatch != null) {
+          debugPrint(
+            '[Syncfusion PDF][dartTextExtract] '
+            'page=${_pdfViewerController.pageNumber} '
+            'durationMs=${textStopwatch.elapsedMilliseconds}',
+          );
+        }
       }
       _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.getPageImage(
         _viewportSize,
         zoomLevel,
       );
+      pageRequestCount++;
       _renderedImages.add(_pdfViewerController.pageNumber);
     } else {
       final Offset offset = _transformationController.toScene(Offset.zero);
@@ -4118,7 +4139,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         final PdfPageViewState? pageState =
             _pdfPagesKey[pageNumber]?.currentState;
         if (pageNumber < cacheStart || pageNumber > cacheEnd) {
-          pageState?.clearPageImage();
+          if (pageState != null) {
+            pageState.clearPageImage();
+            clearCount++;
+          }
           continue;
         }
 
@@ -4136,14 +4160,38 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         if (viewportRect.overlaps(pageRect)) {
           _renderedImages.add(pageNumber);
           //Extract page text only if it's not already available.
-          if (!_pageTextExtractor.containsKey(pageNumber - 1)) {
+          if (shouldExtractPageText &&
+              !_pageTextExtractor.containsKey(pageNumber - 1)) {
+            final Stopwatch? textStopwatch =
+                traceOhos ? (Stopwatch()..start()) : null;
             _pageTextExtractor[pageNumber - 1] = _pdfTextExtractor!.extractText(
               startPageIndex: pageNumber - 1,
             );
+            textExtractCount++;
+            if (textStopwatch != null) {
+              debugPrint(
+                '[Syncfusion PDF][dartTextExtract] page=$pageNumber '
+                'durationMs=${textStopwatch.elapsedMilliseconds}',
+              );
+            }
           }
         }
         pageState?.getPageImage(_viewportSize, zoomLevel);
+        if (pageState != null) {
+          pageRequestCount++;
+        }
       }
+    }
+    if (checkStopwatch != null) {
+      debugPrint(
+        '[Syncfusion PDF][dartCheckVisible] '
+        'currentPage=${_pdfViewerController.pageNumber} '
+        'pageCount=${_pdfViewerController.pageCount} '
+        'durationMs=${checkStopwatch.elapsedMilliseconds} '
+        'semanticsEnabled=$semanticsEnabled '
+        'textExtractCount=$textExtractCount clearCount=$clearCount '
+        'pageRequestCount=$pageRequestCount',
+      );
     }
   }
 

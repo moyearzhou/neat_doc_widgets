@@ -59,6 +59,7 @@ struct RenderPageWork {
   int32_t requestGeneration = 0;
   bool outputBgra = false;
   RenderClock::time_point queuedAt = RenderClock::now();
+  RenderClock::time_point workerFinishedAt = RenderClock::now();
   std::vector<uint8_t> pixels;
   std::string error;
   bool superseded = false;
@@ -88,6 +89,11 @@ bool GetBool(napi_env env, napi_value value, bool* output) {
 int64_t ElapsedMillis(RenderClock::time_point start,
                       RenderClock::time_point end = RenderClock::now()) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+}
+
+size_t StandardCodecUint8HeaderSize(size_t byteLength) {
+  // Success flag + Uint8List tag + StandardMessageCodec's encoded length.
+  return byteLength < 254 ? 3 : byteLength <= 0xffff ? 5 : 7;
 }
 
 bool GetString(napi_env env, napi_value value, std::string* output) {
@@ -248,12 +254,15 @@ void ExecuteRenderPage(napi_env, void* data) {
 
   FPDFBitmap_Destroy(bitmap);
   FPDF_ClosePage(page);
+  request->workerFinishedAt = RenderClock::now();
   lock.unlock();
   OH_LOG_Print(LOG_APP, LOG_INFO, kLogDomain, kLogTag,
-               "[Syncfusion PDF][nativePage] page=%{public}d size=%{public}dx%{public}d "
+               "[Syncfusion PDF][nativePage] document=%{public}d page=%{public}d "
+               "generation=%{public}d size=%{public}dx%{public}d "
                "format=%{public}s queueMs=%{public}lld loadMs=%{public}lld "
                "renderMs=%{public}lld copyMs=%{public}lld",
-               request->pageIndex + 1, request->width, request->height,
+               request->documentId, request->pageIndex + 1, request->requestGeneration,
+               request->width, request->height,
                request->outputBgra ? "bgra" : "rgba",
                static_cast<long long>(queueMs), static_cast<long long>(loadMs),
                static_cast<long long>(renderMs), static_cast<long long>(copyMs));
@@ -275,19 +284,27 @@ void CompleteRenderPage(napi_env env, napi_status status, void* data) {
     napi_reject_deferred(env, request->deferred, error);
   } else {
     const auto bridgeCopyStartedAt = RenderClock::now();
-    void* destination = nullptr;
+    const int64_t completionDelayMs = ElapsedMillis(request->workerFinishedAt,
+                                                     bridgeCopyStartedAt);
+    const size_t headerSize = StandardCodecUint8HeaderSize(request->pixels.size());
+    void* bufferData = nullptr;
     napi_value arrayBuffer;
-    napi_create_arraybuffer(env, request->pixels.size(), &destination, &arrayBuffer);
+    napi_create_arraybuffer(env, request->pixels.size() + headerSize, &bufferData, &arrayBuffer);
+    auto* destination = static_cast<uint8_t*>(bufferData) + headerSize;
     std::memcpy(destination, request->pixels.data(), request->pixels.size());
     const int64_t bridgeCopyMs = ElapsedMillis(bridgeCopyStartedAt);
 
     napi_value bytes;
-    napi_create_typedarray(env, napi_uint8_array, request->pixels.size(), arrayBuffer, 0, &bytes);
+    napi_create_typedarray(env, napi_uint8_array, request->pixels.size(), arrayBuffer,
+                           headerSize, &bytes);
     napi_resolve_deferred(env, request->deferred, bytes);
     OH_LOG_Print(LOG_APP, LOG_INFO, kLogDomain, kLogTag,
-                 "[Syncfusion PDF][nativePageBridge] page=%{public}d "
-                 "bytes=%{public}zu arrayBufferCopyMs=%{public}lld",
-                 request->pageIndex + 1, request->pixels.size(),
+                 "[Syncfusion PDF][nativePageBridge] document=%{public}d page=%{public}d "
+                 "generation=%{public}d bytes=%{public}zu completionDelayMs=%{public}lld "
+                 "arrayBufferCopyMs=%{public}lld",
+                 request->documentId, request->pageIndex + 1,
+                 request->requestGeneration, request->pixels.size(),
+                 static_cast<long long>(completionDelayMs),
                  static_cast<long long>(bridgeCopyMs));
   }
 
@@ -457,13 +474,16 @@ void CompleteRenderTile(napi_env env, napi_status status, void* data) {
     napi_create_string_utf8(env, request->error.c_str(), NAPI_AUTO_LENGTH, &error);
     napi_reject_deferred(env, request->deferred, error);
   } else {
-    void* destination = nullptr;
+    const size_t headerSize = StandardCodecUint8HeaderSize(request->pixels.size());
+    void* bufferData = nullptr;
     napi_value arrayBuffer;
-    napi_create_arraybuffer(env, request->pixels.size(), &destination, &arrayBuffer);
+    napi_create_arraybuffer(env, request->pixels.size() + headerSize, &bufferData, &arrayBuffer);
+    auto* destination = static_cast<uint8_t*>(bufferData) + headerSize;
     std::memcpy(destination, request->pixels.data(), request->pixels.size());
 
     napi_value bytes;
-    napi_create_typedarray(env, napi_uint8_array, request->pixels.size(), arrayBuffer, 0, &bytes);
+    napi_create_typedarray(env, napi_uint8_array, request->pixels.size(), arrayBuffer,
+                           headerSize, &bytes);
     napi_resolve_deferred(env, request->deferred, bytes);
   }
 

@@ -19,6 +19,8 @@ import {
   MethodCall,
   MethodCallHandler,
   MethodChannel,
+  StandardMessageCodec,
+  StandardMethodCodec,
   MethodResult,
 } from '@ohos/flutter_ohos';
 import { pdfService } from '@kit.PDFKit';
@@ -27,6 +29,49 @@ import { HashMap } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { LogUtil } from './utils/LogUtil';
 import pdfRenderer from 'libpdf_renderer.so';
+
+const STANDARD_CODEC_UINT8_ARRAY: number = 8;
+
+class PdfPixelMethodCodec extends StandardMethodCodec {
+  constructor() {
+    super(StandardMessageCodec.INSTANCE);
+  }
+
+  encodeSuccessEnvelope(value: ESObject): ArrayBuffer {
+    if (!(value instanceof Uint8Array)) {
+      return super.encodeSuccessEnvelope(value);
+    }
+
+    const byteLength = value.byteLength;
+    const headerLength = byteLength < 254 ? 3 : byteLength <= 0xffff ? 5 : 7;
+    let buffer: ArrayBuffer;
+    let reusedPrefixedBuffer = false;
+    if (value.byteOffset === headerLength &&
+      value.byteOffset + byteLength === value.buffer.byteLength) {
+      buffer = value.buffer as ArrayBuffer;
+      reusedPrefixedBuffer = true;
+    } else {
+      buffer = new ArrayBuffer(headerLength + byteLength);
+      new Uint8Array(buffer, headerLength, byteLength).set(value);
+    }
+
+    const header = new DataView(buffer);
+    header.setUint8(0, 0);
+    header.setUint8(1, STANDARD_CODEC_UINT8_ARRAY);
+    if (byteLength < 254) {
+      header.setUint8(2, byteLength);
+    } else if (byteLength <= 0xffff) {
+      header.setUint8(2, 254);
+      header.setUint16(3, byteLength, true);
+    } else {
+      header.setUint8(2, 255);
+      header.setUint32(3, byteLength, true);
+    }
+    LogUtil.info(`[Syncfusion PDF][arktsCodec] bytes=${byteLength}, ` +
+      `reusedPrefixedBuffer=${reusedPrefixedBuffer}`);
+    return buffer;
+  }
+}
 
 // 定义文档信息接口
 interface DocumentInfo {
@@ -66,7 +111,11 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
   }
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
-    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'syncfusion_flutter_pdfviewer');
+    this.channel = new MethodChannel(
+      binding.getBinaryMessenger(),
+      'syncfusion_flutter_pdfviewer',
+      new PdfPixelMethodCodec()
+    );
     this.pathDir = binding.getApplicationContext().filesDir;
     this.channel.setMethodCallHandler(this)
   }
@@ -295,8 +344,8 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       const requestGeneration = (docInfo.pageRequestGeneration[pageIndex] ?? 0) + 1;
       docInfo.pageRequestGeneration[pageIndex] = requestGeneration;
       const startedAt = Date.now();
-      LogUtil.info(`Syncfusion PDF PDFium page request: page=${index}, width=${outputWidth}, ` +
-        `height=${outputHeight}, generation=${requestGeneration}, format=${outputBgra ? 'bgra' : 'rgba'}`);
+      LogUtil.info(`[Syncfusion PDF][arktsPageRequest] document=${documentID}, page=${index}, ` +
+        `size=${outputWidth}x${outputHeight}, generation=${requestGeneration}`);
 
       try {
         if (docInfo.pdfiumDocumentId === undefined) {
@@ -312,7 +361,8 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
             outputBgra
           ),
           outputBgra,
-          `page=${index} size=${outputWidth}x${outputHeight} format=${outputBgra ? 'bgra' : 'rgba'}`
+          `document=${documentID} page=${index} generation=${requestGeneration} ` +
+            `size=${outputWidth}x${outputHeight} format=${outputBgra ? 'bgra' : 'rgba'}`
         );
         if (page === null) {
           LogUtil.info(`Syncfusion PDF PDFium page superseded: page=${index}, ` +
@@ -320,10 +370,12 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
           result.success(null);
           return;
         }
-        LogUtil.info(`Syncfusion PDF PDFium page rendered: page=${index}, width=${outputWidth}, ` +
-          `height=${outputHeight}, generation=${requestGeneration}, durationMs=${Date.now() - startedAt}, ` +
-          `bytes=${page.length}`);
+        LogUtil.info(`[Syncfusion PDF][arktsPageResult] document=${documentID}, page=${index}, ` +
+          `generation=${requestGeneration}, durationMs=${Date.now() - startedAt}, bytes=${page.length}`);
+        const replyStartedAt = Date.now();
         result.success(page);
+        LogUtil.info(`[Syncfusion PDF][arktsPageReply] document=${documentID}, page=${index}, ` +
+          `bytes=${page.length}, replyMs=${Date.now() - replyStartedAt}`);
         return;
       } catch (error) {
         // Keep PDF Kit as a recovery path and preserve the requested pixel contract.
@@ -394,7 +446,8 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
           requestGeneration
         ),
         true,
-        `tile page=${pageNumber} size=${Math.floor(width)}x${Math.floor(height)}`
+        `document=${documentID} tile page=${pageNumber} generation=${requestGeneration} ` +
+          `size=${Math.floor(width)}x${Math.floor(height)}`
       );
       if (tile === null) {
         LogUtil.info(`Syncfusion PDF PDFium tile superseded: page=${pageNumber}, ` +
@@ -405,7 +458,10 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       LogUtil.info(`Syncfusion PDF PDFium tile rendered: page=${pageNumber}, width=${Math.floor(width)}, ` +
         `height=${Math.floor(height)}, scale=${scale}, generation=${requestGeneration}, ` +
         `durationMs=${Date.now() - startedAt}, bytes=${tile.length}`);
+      const replyStartedAt = Date.now();
       result.success(tile);
+      LogUtil.info(`[Syncfusion PDF][arktsTileReply] document=${documentID}, page=${pageNumber}, ` +
+        `bytes=${tile.length}, replyMs=${Date.now() - replyStartedAt}`);
     } catch (error) {
       LogUtil.error('Syncfusion PDF getTileImage failed with error : ' + error);
       result.error(error.code, error.message, error);
@@ -445,11 +501,9 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
 
     this.isPdfiumRenderActive = true;
     const queueDuration = Date.now() - task.queuedAt;
-    if (queueDuration > 0) {
-      LogUtil.info(`Syncfusion PDF render dispatch: ${task.label}, queueMs=${queueDuration}, ` +
-        `foregroundPending=${this.foregroundRenderQueue.length}, ` +
-        `thumbnailPending=${this.thumbnailRenderQueue.length}`);
-    }
+    LogUtil.info(`[Syncfusion PDF][arktsDispatch] ${task.label}, ` +
+      `queueMs=${queueDuration}, foregroundPending=${this.foregroundRenderQueue.length}, ` +
+      `thumbnailPending=${this.thumbnailRenderQueue.length}`);
     try {
       task.resolve(await task.execute());
     } catch (error) {
