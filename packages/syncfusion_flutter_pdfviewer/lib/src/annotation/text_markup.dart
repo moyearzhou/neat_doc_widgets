@@ -1,9 +1,85 @@
-import 'dart:math' show Point, sqrt;
+import 'dart:math' show Point, max, min, sqrt;
 import 'package:flutter/material.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../../pdfviewer.dart';
 import 'annotation.dart';
 import 'annotation_view.dart';
+
+String _selectedTextFromLines(List<PdfTextLine> textBoundsCollection) {
+  return textBoundsCollection
+      .map((PdfTextLine textLine) => textLine.text)
+      .join('\n');
+}
+
+/// Rebuilds text-markup selection lines from the PDF page text and annotation
+/// geometry. PDF annotation `/Contents` stores annotation content, not the
+/// selected page text, so loaded annotations must recover their text from the
+/// glyphs covered by their markup rectangles.
+List<PdfTextLine> resolveTextMarkupLines({
+  required List<Rect> markupRects,
+  required List<TextLine> pageTextLines,
+  required int pageNumber,
+}) {
+  return <PdfTextLine>[
+    for (final Rect markupRect in markupRects)
+      PdfTextLine(
+        markupRect,
+        _textCoveredByRect(markupRect, pageTextLines),
+        pageNumber,
+      ),
+  ];
+}
+
+String _textCoveredByRect(Rect markupRect, List<TextLine> pageTextLines) {
+  final List<String> selectedLines = <String>[];
+  for (final TextLine line in pageTextLines) {
+    if (!line.bounds.overlaps(markupRect)) continue;
+
+    final StringBuffer selectedText = StringBuffer();
+    TextGlyph? previousGlyph;
+    for (final TextWord word in line.wordCollection) {
+      for (final TextGlyph glyph in word.glyphs) {
+        if (!_coversGlyph(markupRect, glyph.bounds)) continue;
+        if (previousGlyph != null &&
+            _hasTextGap(previousGlyph!, glyph) &&
+            previousGlyph!.text.trimRight() == previousGlyph!.text &&
+            glyph.text.trimLeft() == glyph.text) {
+          selectedText.write(' ');
+        }
+        selectedText.write(glyph.text);
+        previousGlyph = glyph;
+      }
+    }
+    if (selectedText.isNotEmpty) {
+      selectedLines.add(
+        selectedText.toString().replaceAll(RegExp(r'\s+'), ' ').trim(),
+      );
+    }
+  }
+  return selectedLines.join('\n');
+}
+
+bool _coversGlyph(Rect markupRect, Rect glyphBounds) {
+  final double tolerance =
+      glyphBounds.height > 0 ? min(1, glyphBounds.height * 0.1) : 0.5;
+  return markupRect.inflate(tolerance).contains(glyphBounds.center);
+}
+
+bool _hasTextGap(TextGlyph previous, TextGlyph current) {
+  if (previous.isRotated || current.isRotated) {
+    return max(
+          current.bounds.top - previous.bounds.bottom,
+          previous.bounds.top - current.bounds.bottom,
+        ) >
+        1;
+  }
+  return max(
+        current.bounds.left - previous.bounds.right,
+        previous.bounds.left - current.bounds.right,
+      ) >
+      1;
+}
 
 /// Represents the highlight annotation on the text contents in the page.
 class HighlightAnnotation extends Annotation {
@@ -11,10 +87,11 @@ class HighlightAnnotation extends Annotation {
   ///
   /// The [textBoundsCollection] represents the bounds collection of the highlight annotations that are added in the multiple lines of text.
   HighlightAnnotation({required List<PdfTextLine> textBoundsCollection})
-    : assert(textBoundsCollection.isNotEmpty),
-      assert(_checkTextMarkupRects(textBoundsCollection)),
-      super(pageNumber: textBoundsCollection.first.pageNumber) {
+      : assert(textBoundsCollection.isNotEmpty),
+        assert(_checkTextMarkupRects(textBoundsCollection)),
+        super(pageNumber: textBoundsCollection.first.pageNumber) {
     _textMarkupRects = <Rect>[];
+    selectedText = _selectedTextFromLines(textBoundsCollection);
 
     double minX = textBoundsCollection.first.bounds.left,
         minY = textBoundsCollection.first.bounds.top,
@@ -34,6 +111,9 @@ class HighlightAnnotation extends Annotation {
   }
 
   late final List<Rect> _textMarkupRects;
+
+  /// The selected PDF text represented by this highlight.
+  late String selectedText;
 }
 
 /// Represents the strikethrough annotation on the text contents in the page.
@@ -42,9 +122,9 @@ class StrikethroughAnnotation extends Annotation {
   ///
   /// The [textBoundsCollection] represents the bounds collection of the strikethrough annotations that are added in the multiple lines of text.
   StrikethroughAnnotation({required List<PdfTextLine> textBoundsCollection})
-    : assert(textBoundsCollection.isNotEmpty),
-      assert(_checkTextMarkupRects(textBoundsCollection)),
-      super(pageNumber: textBoundsCollection.first.pageNumber) {
+      : assert(textBoundsCollection.isNotEmpty),
+        assert(_checkTextMarkupRects(textBoundsCollection)),
+        super(pageNumber: textBoundsCollection.first.pageNumber) {
     _textMarkupRects = <Rect>[];
 
     double minX = textBoundsCollection.first.bounds.left,
@@ -73,10 +153,11 @@ class UnderlineAnnotation extends Annotation {
   ///
   /// The [textBoundsCollection] represents the bounds collection of the underline annotations that are added in the multiple lines of text.
   UnderlineAnnotation({required List<PdfTextLine> textBoundsCollection})
-    : assert(textBoundsCollection.isNotEmpty),
-      assert(_checkTextMarkupRects(textBoundsCollection)),
-      super(pageNumber: textBoundsCollection.first.pageNumber) {
+      : assert(textBoundsCollection.isNotEmpty),
+        assert(_checkTextMarkupRects(textBoundsCollection)),
+        super(pageNumber: textBoundsCollection.first.pageNumber) {
     _textMarkupRects = <Rect>[];
+    selectedText = _selectedTextFromLines(textBoundsCollection);
 
     double minX = textBoundsCollection.first.bounds.left,
         minY = textBoundsCollection.first.bounds.top,
@@ -96,6 +177,9 @@ class UnderlineAnnotation extends Annotation {
   }
 
   late final List<Rect> _textMarkupRects;
+
+  /// The selected PDF text represented by this underline.
+  late String selectedText;
 }
 
 /// Represents the squiggly annotation on the text contents in the page.
@@ -104,9 +188,9 @@ class SquigglyAnnotation extends Annotation {
   ///
   /// The [textBoundsCollection] represents the bounds collection of the squiggly annotations that are added in the multiple lines of text.
   SquigglyAnnotation({required List<PdfTextLine> textBoundsCollection})
-    : assert(textBoundsCollection.isNotEmpty),
-      assert(_checkTextMarkupRects(textBoundsCollection)),
-      super(pageNumber: textBoundsCollection.first.pageNumber) {
+      : assert(textBoundsCollection.isNotEmpty),
+        assert(_checkTextMarkupRects(textBoundsCollection)),
+        super(pageNumber: textBoundsCollection.first.pageNumber) {
     _textMarkupRects = <Rect>[];
 
     double minX = textBoundsCollection.first.bounds.left,
@@ -140,22 +224,21 @@ class TextMarkupAnnotationView extends InteractiveGraphicsView
     Color selectorColor = defaultSelectorColor,
     double heightPercentage = 1,
   }) : super(
-         key: key,
-         color: annotation.color,
-         strokeWidth: 1,
-         opacity: annotation.opacity,
-         isSelected: isSelected,
-         canMove: false,
-         selectorColor: selectorColor,
-       ) {
-    _textMarkupType =
-        annotation is HighlightAnnotation
-            ? TextMarkupType.highlight
-            : annotation is StrikethroughAnnotation
+          key: key,
+          color: annotation.color,
+          strokeWidth: 1,
+          opacity: annotation.opacity,
+          isSelected: isSelected,
+          canMove: false,
+          selectorColor: selectorColor,
+        ) {
+    _textMarkupType = annotation is HighlightAnnotation
+        ? TextMarkupType.highlight
+        : annotation is StrikethroughAnnotation
             ? TextMarkupType.strikethrough
             : annotation is UnderlineAnnotation
-            ? TextMarkupType.underline
-            : TextMarkupType.squiggly;
+                ? TextMarkupType.underline
+                : TextMarkupType.squiggly;
     _heightPercentage = heightPercentage;
   }
 
@@ -203,12 +286,12 @@ class RenderTextMarkupAnnotationView extends RenderInteractiveGraphicsView {
     required Color selectorColor,
     double heightPercentage = 1,
   }) : super(
-         strokeColor: color,
-         opacity: opacity,
-         strokeWidth: 1,
-         isSelected: isSelected,
-         selectorColor: selectorColor,
-       ) {
+          strokeColor: color,
+          opacity: opacity,
+          strokeWidth: 1,
+          isSelected: isSelected,
+          selectorColor: selectorColor,
+        ) {
     _textMarkupType = textMarkupType;
     _heightPercentage = heightPercentage;
   }
@@ -336,11 +419,9 @@ class RenderTextMarkupAnnotationView extends RenderInteractiveGraphicsView {
     final double spacing = height * 0.18;
     final Path squigglyPath = Path();
     squigglyPath.moveTo(x, y);
-    for (
-      double distance = 0;
-      distance + spacing < length;
-      distance += spacing
-    ) {
+    for (double distance = 0;
+        distance + spacing < length;
+        distance += spacing) {
       if (showUnderlineAtStart) {
         squigglyPath.lineTo(x + distance + spacing, y);
       } else {
