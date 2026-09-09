@@ -2055,15 +2055,26 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       final PdfPage page = _document!.pages[pageIndex];
       final int pageNumber = pageIndex + 1;
       final PdfAnnotationCollection annotations = page.annotations;
+      List<TextLine>? pageTextLines;
       for (
         int annotationIndex = 0;
         annotationIndex < annotations.count;
         annotationIndex++
       ) {
         final PdfAnnotation pdfAnnotation = annotations[annotationIndex];
+        if (pdfAnnotation is PdfTextMarkupAnnotation) {
+          // OHOS skips normal page text extraction while semantics are off.
+          // Embedded markup still needs its source text for copy/translation,
+          // so extract only annotated pages and cache once per page here.
+          pageTextLines ??= _pdfTextExtractor!.extractTextLines(
+            startPageIndex: pageIndex,
+            endPageIndex: pageIndex,
+          );
+        }
         final Annotation? annotation = _createAnnotation(
           pdfAnnotation,
           pageNumber,
+          pageTextLines: pageTextLines,
         );
 
         if (annotation != null) {
@@ -2076,7 +2087,11 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   /// Creates the annotation from the PDF annotation.
-  Annotation? _createAnnotation(PdfAnnotation pdfAnnotation, int pageNumber) {
+  Annotation? _createAnnotation(
+    PdfAnnotation pdfAnnotation,
+    int pageNumber, {
+    List<TextLine>? pageTextLines,
+  }) {
     Annotation? annotation;
     if (pdfAnnotation is PdfTextMarkupAnnotation) {
       final PdfTextMarkupAnnotation textMarkup = pdfAnnotation;
@@ -2089,22 +2104,38 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       switch (textMarkup.textMarkupAnnotationType) {
         case PdfTextMarkupAnnotationType.highlight:
           annotation = HighlightAnnotation(
-            textBoundsCollection: _getTextLines(textMarkupRects, pageNumber),
+            textBoundsCollection: resolveTextMarkupLines(
+              markupRects: textMarkupRects,
+              pageTextLines: pageTextLines ?? const <TextLine>[],
+              pageNumber: pageNumber,
+            ),
           );
           break;
         case PdfTextMarkupAnnotationType.underline:
           annotation = UnderlineAnnotation(
-            textBoundsCollection: _getTextLines(textMarkupRects, pageNumber),
+            textBoundsCollection: resolveTextMarkupLines(
+              markupRects: textMarkupRects,
+              pageTextLines: pageTextLines ?? const <TextLine>[],
+              pageNumber: pageNumber,
+            ),
           );
           break;
         case PdfTextMarkupAnnotationType.strikethrough:
           annotation = StrikethroughAnnotation(
-            textBoundsCollection: _getTextLines(textMarkupRects, pageNumber),
+            textBoundsCollection: resolveTextMarkupLines(
+              markupRects: textMarkupRects,
+              pageTextLines: pageTextLines ?? const <TextLine>[],
+              pageNumber: pageNumber,
+            ),
           );
           break;
         case PdfTextMarkupAnnotationType.squiggly:
           annotation = SquigglyAnnotation(
-            textBoundsCollection: _getTextLines(textMarkupRects, pageNumber),
+            textBoundsCollection: resolveTextMarkupLines(
+              markupRects: textMarkupRects,
+              pageTextLines: pageTextLines ?? const <TextLine>[],
+              pageNumber: pageNumber,
+            ),
           );
           break;
       }
@@ -2176,16 +2207,6 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       annotation.subject = pdfAnnotation.subject;
     }
     return annotation;
-  }
-
-  /// Returns the text lines from the text markup annotation.
-  List<PdfTextLine> _getTextLines(List<Rect> rects, int pageNumber) {
-    final List<PdfTextLine> textLines = <PdfTextLine>[];
-    for (final Rect rect in rects) {
-      final PdfTextLine textLine = PdfTextLine(rect, '', pageNumber);
-      textLines.add(textLine);
-    }
-    return textLines;
   }
 
   /// Save the PDF document with the modified data and returns the data bytes.
@@ -2313,9 +2334,9 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
           CancelableOperation<PdfDocument?>.fromFuture(_getPdfFile(_pdfBytes));
       _document = await _pdfDocumentLoadCancellableOperation?.value;
       if (_document != null) {
+        _pdfTextExtractor = PdfTextExtractor(_document!);
         _retrieveFormFieldsDetails();
         _retrieveAnnotations();
-        _pdfTextExtractor = PdfTextExtractor(_document!);
       }
       final int pageCount = await _plugin.initializePdfRenderer(
         _renderDigitalSignatures() ?? _pdfBytes,
