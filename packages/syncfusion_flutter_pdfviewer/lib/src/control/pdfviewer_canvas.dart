@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -265,6 +266,13 @@ class CanvasRenderBox extends RenderBox {
     _verticalDragRecognizer.gestureSettings = const DeviceGestureSettings(
       touchSlop: 10,
     );
+    _touchSelectionHandleDragRecognizer =
+        PanGestureRecognizer()
+          ..onStart = handleDragStart
+          ..onUpdate = handleDragUpdate
+          ..onEnd = handleDragEnd
+          ..onDown = handleDragDown
+          ..gestureSettings = const DeviceGestureSettings(touchSlop: 0);
   }
 
   /// Height of Page
@@ -381,6 +389,7 @@ class CanvasRenderBox extends RenderBox {
   late HorizontalDragGestureRecognizer _dragRecognizer;
   late LongPressGestureRecognizer _longPressRecognizer;
   late VerticalDragGestureRecognizer _verticalDragRecognizer;
+  late PanGestureRecognizer _touchSelectionHandleDragRecognizer;
   late PdfDocumentLinkAnnotation? _documentLinkAnnotation;
   late PdfUriAnnotation? _pdfUriAnnotation;
   PdfTextWebLink? _pdfTextWebLink;
@@ -391,9 +400,23 @@ class CanvasRenderBox extends RenderBox {
   bool _isConsecutiveTap = false;
   bool _isSelectedTextContainsRotatedGlyph = false;
 
+  // OHOS desktop devices support both mouse and touch. Treat only their mouse
+  // input as desktop selection so touch keeps long-press and handle dragging.
+  bool get _supportsDesktopPointerTextSelection =>
+      kIsDesktop || (!kIsWeb && defaultTargetPlatform == TargetPlatform.ohos);
+
+  bool get _isOhosPlatform =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.ohos;
+
   @override
   void handleEvent(PointerEvent event, BoxHitTestEntry entry) {
     if (event is PointerDownEvent) {
+      if (_supportsDesktopPointerTextSelection &&
+          !isMobileWebView &&
+          enableTextSelection &&
+          interactionMode == PdfInteractionMode.selection) {
+        _isMousePointer = event.kind == PointerDeviceKind.mouse;
+      }
       _tapRecognizer.addPointer(event);
       if ((interactionMode == PdfInteractionMode.selection && kIsDesktop) ||
           !kIsDesktop) {
@@ -441,8 +464,16 @@ class CanvasRenderBox extends RenderBox {
               localPosition,
             );
             if (isStartDragPossible || isEndDragPossible) {
-              _dragRecognizer.addPointer(event);
-              _verticalDragRecognizer.addPointer(event);
+              if (_isOhosPlatform &&
+                  event.kind == PointerDeviceKind.touch) {
+                // The OHOS host pan recognizer accepts near the normal drag
+                // slop. Claim a touched selection handle on its first move so
+                // the PDF viewport cannot win the same gesture and scroll.
+                _touchSelectionHandleDragRecognizer.addPointer(event);
+              } else {
+                _dragRecognizer.addPointer(event);
+                _verticalDragRecognizer.addPointer(event);
+              }
             }
           }
         }
@@ -466,7 +497,7 @@ class CanvasRenderBox extends RenderBox {
   /// Handles the tap down event
   void handleTapDown(TapDownDetails details) {
     _tapDetails = _globalToLocal(details.globalPosition);
-    if (kIsDesktop &&
+    if (_supportsDesktopPointerTextSelection &&
         !isMobileWebView &&
         enableTextSelection &&
         interactionMode == PdfInteractionMode.selection) {
@@ -1240,7 +1271,9 @@ class CanvasRenderBox extends RenderBox {
   void handleLongPressStart(LongPressStartDetails details) {
     _isConsecutiveTap = false;
     _isSelectedTextContainsRotatedGlyph = false;
-    if (kIsDesktop && !isMobileWebView && pdfDocument != null) {
+    if (_supportsDesktopPointerTextSelection &&
+        !isMobileWebView &&
+        pdfDocument != null) {
       clearMouseSelection();
       final Offset? localPosition = _globalToLocal(details.globalPosition);
       final bool isTOC = localPosition != null && findTOC(localPosition);
@@ -1289,7 +1322,9 @@ class CanvasRenderBox extends RenderBox {
 
   /// Handles the drag update event.
   void handleDragUpdate(DragUpdateDetails details) {
-    if ((kIsDesktop && !isMobileWebView && _isMousePointer) ||
+    if ((_supportsDesktopPointerTextSelection &&
+            !isMobileWebView &&
+            _isMousePointer) ||
         pdfViewerController.annotationMode != PdfAnnotationMode.none) {
       _updateSelectionPan(details);
     }
@@ -1318,7 +1353,7 @@ class CanvasRenderBox extends RenderBox {
 
   /// Handles the drag end event.
   void handleDragEnd(DragEndDetails details) {
-    if ((kIsDesktop &&
+    if ((_supportsDesktopPointerTextSelection &&
             !isMobileWebView &&
             _textSelectionHelper.mouseSelectionEnabled) ||
         pdfViewerController.annotationMode != PdfAnnotationMode.none) {
@@ -1448,7 +1483,7 @@ class CanvasRenderBox extends RenderBox {
       globalPosition = details.position;
     }
     final Offset? localPosition = _globalToLocal(globalPosition);
-    if ((kIsDesktop &&
+    if ((_supportsDesktopPointerTextSelection &&
             !isMobileWebView &&
             enableTextSelection &&
             interactionMode == PdfInteractionMode.selection &&
