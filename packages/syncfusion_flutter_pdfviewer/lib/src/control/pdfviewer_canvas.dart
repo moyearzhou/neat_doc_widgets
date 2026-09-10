@@ -464,8 +464,7 @@ class CanvasRenderBox extends RenderBox {
               localPosition,
             );
             if (isStartDragPossible || isEndDragPossible) {
-              if (_isOhosPlatform &&
-                  event.kind == PointerDeviceKind.touch) {
+              if (_isOhosPlatform && event.kind == PointerDeviceKind.touch) {
                 // The OHOS host pan recognizer accepts near the normal drag
                 // slop. Claim a touched selection handle on its first move so
                 // the PDF viewport cannot win the same gesture and scroll.
@@ -1322,9 +1321,16 @@ class CanvasRenderBox extends RenderBox {
 
   /// Handles the drag update event.
   void handleDragUpdate(DragUpdateDetails details) {
-    if ((_supportsDesktopPointerTextSelection &&
-            !isMobileWebView &&
-            _isMousePointer) ||
+    final bool isMouseSelectionDrag =
+        _supportsDesktopPointerTextSelection &&
+        !isMobileWebView &&
+        _isMousePointer;
+    if (isMouseSelectionDrag && !_textSelectionHelper.mouseSelectionEnabled) {
+      // Desktop drags may begin in a page margin. Keep looking for the first
+      // glyph entered instead of permanently discarding that drag at start.
+      _enableMouseSelection(details, 'DragStart');
+    }
+    if ((isMouseSelectionDrag && _textSelectionHelper.mouseSelectionEnabled) ||
         pdfViewerController.annotationMode != PdfAnnotationMode.none) {
       _updateSelectionPan(details);
     }
