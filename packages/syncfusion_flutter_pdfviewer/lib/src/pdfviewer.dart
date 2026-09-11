@@ -21,6 +21,7 @@ import 'annotation/text_markup.dart';
 import 'bookmark/bookmark_view.dart';
 import 'change_tracker/change_command.dart';
 import 'change_tracker/change_tracker.dart';
+import 'common/device_info_helper.dart';
 import 'common/mobile_helper.dart'
     if (dart.library.js_interop) 'common/web_helper.dart'
     as helper;
@@ -3564,9 +3565,11 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     if (!kIsWeb) {
       _isMobileView |= Platform.isIOS || Platform.isAndroid;
     }
-    if (!kIsDesktop &&
-        !Platform.isIOS &&
-        !Platform.environment.containsKey('FLUTTER_TEST')) {
+    if (!kIsWeb &&
+        shouldQueryAndroidDeviceInfo(
+          isAndroid: Platform.isAndroid,
+          isFlutterTest: Platform.environment.containsKey('FLUTTER_TEST'),
+        )) {
       final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
       final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
       _isAndroidTV = androidInfo.systemFeatures.contains(
