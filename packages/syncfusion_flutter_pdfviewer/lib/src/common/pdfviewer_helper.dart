@@ -13,6 +13,35 @@ import 'mobile_helper.dart'
 bool kIsDesktop =
     kIsWeb || Platform.isMacOS || Platform.isWindows || Platform.isLinux;
 
+/// Whether pointer-driven scaling must be enabled only while a scale-capable
+/// pointer is active.
+///
+/// OHOS devices can receive both touch and mouse input. Keeping scaling always
+/// enabled makes Flutter's [InteractiveViewer] interpret a mouse-wheel-up event
+/// as zoom-in. The pointer-aware gate keeps wheel input available for PDF
+/// scrolling while allowing touch scaling to be enabled for the gesture.
+bool get kUsesPointerAwarePdfScaling => usesPointerAwarePdfScaling(
+  isDesktop: kIsDesktop,
+  isOhos: !kIsWeb && defaultTargetPlatform == TargetPlatform.ohos,
+);
+
+/// Returns whether PDF scaling should follow the active pointer state.
+bool usesPointerAwarePdfScaling({
+  required bool isDesktop,
+  required bool isOhos,
+}) => isDesktop || isOhos;
+
+/// Returns whether the interactive PDF surface may currently scale.
+bool isPdfPointerScaleEnabled({
+  required bool isMobileWebView,
+  required bool pointerScaleEnabled,
+  bool? usesPointerAwareScaling,
+}) {
+  final bool usePointerGate =
+      usesPointerAwareScaling ?? kUsesPointerAwarePdfScaling;
+  return !usePointerGate || isMobileWebView || pointerScaleEnabled;
+}
+
 /// Indicates whether the current environment is running in macOS
 bool kIsMacOS = helper.getPlatformType() == 'macos';
 

@@ -1212,7 +1212,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   double? _otherContextHeight;
   double _maxPdfPageWidth = 0.0;
   final double _minScale = 1;
-  bool _isScaleEnabled = !kIsDesktop;
+  bool _isScaleEnabled = !kUsesPointerAwarePdfScaling;
   bool _isPdfPageTapped = false;
   bool _isDocumentLoadInitiated = false;
   Orientation? _deviceOrientation;
@@ -4372,7 +4372,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   void _handlePdfPagePointerMove(PointerMoveEvent details) {
-    if (details.kind == PointerDeviceKind.touch && kIsDesktop) {
+    if (details.kind == PointerDeviceKind.touch &&
+        kUsesPointerAwarePdfScaling) {
       if (!_isScaleEnabled) {
         setState(() {
           _isScaleEnabled = true;
@@ -4382,7 +4383,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   void _handlePdfPagePointerUp(PointerUpEvent details) {
-    if (details.kind == PointerDeviceKind.touch && kIsDesktop) {
+    if (details.kind == PointerDeviceKind.touch &&
+        kUsesPointerAwarePdfScaling) {
       if (_isScaleEnabled) {
         setState(() {
           _isScaleEnabled = false;
