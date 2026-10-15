@@ -13,6 +13,9 @@ extension _PdfViewerTrackpad on SfPdfViewerState {
     }
     if (!mounted || _pdfViewerController.pageCount == 0 || isBookmarkViewOpen) {
       _trackpadMomentum.stop();
+      for (final page in _pdfPagesKey.values) {
+        page.currentState?.resumeRasterization();
+      }
       _trackpadSession = null;
       _trackpadPointer = null;
       _trackpadVelocity = null;
@@ -35,6 +38,8 @@ extension _PdfViewerTrackpad on SfPdfViewerState {
         return;
       }
       _trackpadMomentum.stop();
+      _tileTimer?.cancel();
+      _tileTimer = null;
       _trackpadDidScale = false;
       _trackpadVelocity = VelocityTracker.withKind(PointerDeviceKind.trackpad)
         ..addPosition(event.timeStamp, Offset.zero);
@@ -71,7 +76,12 @@ extension _PdfViewerTrackpad on SfPdfViewerState {
         maxZoom: widget.maxZoomLevel,
       );
       _trackpadVelocity?.addPosition(event.timeStamp, event.pan);
-      _trackpadDidScale = _trackpadDidScale || (event.scale - 1).abs() > .0001;
+      if (!_trackpadDidScale && (event.scale - 1).abs() > .0001) {
+        _trackpadDidScale = true;
+        for (final page in _pdfPagesKey.values) {
+          page.currentState?.suspendRasterization();
+        }
+      }
       _applyTrackpadViewport(target.zoom, target.offset);
     } else if (event is PointerPanZoomEndEvent &&
         _trackpadPointer == event.pointer) {
@@ -80,6 +90,9 @@ extension _PdfViewerTrackpad on SfPdfViewerState {
       _trackpadSession = null;
       _trackpadPointer = null;
       _trackpadVelocity = null;
+      for (final page in _pdfPagesKey.values) {
+        page.currentState?.resumeRasterization();
+      }
       if (!_trackpadDidScale) {
         _trackpadMomentum.start(
           // Controller offsets may be mirrored for right-to-left navigation.
