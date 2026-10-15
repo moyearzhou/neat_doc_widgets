@@ -474,9 +474,14 @@ abstract class PdfField implements IPdfWrapper {
       IPdfPrimitive? dic = _fieldHelper.crossTable!.getObject(
         _fieldHelper.dictionary![PdfDictionaryProperties.parent],
       );
+      final Set<PdfDictionary> visitedParents = <PdfDictionary>{};
       while (dic != null &&
           dic is PdfDictionary &&
           dic.containsKey(PdfDictionaryProperties.parent)) {
+        if (visitedParents.contains(dic)) {
+          break;
+        }
+        visitedParents.add(dic);
         if (dic.containsKey(PdfDictionaryProperties.t)) {
           name =
               name == null
@@ -3446,7 +3451,9 @@ class PdfFieldHelper {
   ) {
     IPdfPrimitive? primitive;
     PdfDictionary? dic = dictionary;
-    while (primitive == null && dic != null) {
+    final Set<PdfDictionary> visitedParents = <PdfDictionary>{};
+    while (primitive == null && dic != null && !visitedParents.contains(dic)) {
+      visitedParents.add(dic);
       if (dic.containsKey(value)) {
         primitive = crossTable!.getObject(dic[value]);
       } else {

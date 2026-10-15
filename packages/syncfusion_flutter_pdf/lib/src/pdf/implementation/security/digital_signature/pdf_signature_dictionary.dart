@@ -2025,8 +2025,8 @@ class _RmdSigner implements ISigner {
   }
 }
 
-// ignore: avoid_classes_with_only_static_members
 /// internal class
+// ignore: avoid_classes_with_only_static_members
 class NistObjectIds {
   // ignore: public_member_api_docs
   static DerObjectID nistAlgorithm = DerObjectID('2.16.840.1.101.3.4');

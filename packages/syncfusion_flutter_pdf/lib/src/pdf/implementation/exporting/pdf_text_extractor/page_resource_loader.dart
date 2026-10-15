@@ -283,11 +283,7 @@ class PdfPageResources {
   dynamic operator [](String key) => _returnValue(key);
 
   dynamic _returnValue(String key) {
-    if (resources.containsKey(key)) {
-      return resources[key];
-    } else {
-      return null;
-    }
+    return resources[_resolveResourceKey(key)];
   }
 
   /// Returns true if the FontCollection has same font face.
@@ -322,6 +318,34 @@ class PdfPageResources {
 
   /// internal method
   bool containsKey(String? key) {
-    return resources.containsKey(key);
+    return resources.containsKey(key) || _resolveResourceKey(key) != null;
+  }
+
+  static final RegExp _nameEscape = RegExp(r'#([0-9a-fA-F]{2})');
+
+  static String _decodeResourceName(String name) {
+    // PDF names escape individual bytes as #xx. Decode once: #232D denotes
+    // a literal "#2D", not a hyphen. Leave malformed escapes unchanged.
+    return name.replaceAllMapped(
+      _nameEscape,
+      (Match match) => String.fromCharCode(int.parse(match[1]!, radix: 16)),
+    );
+  }
+
+  String? _resolveResourceKey(String? key) {
+    if (resources.containsKey(key) || key == null) {
+      return key;
+    }
+    // Dictionaries can retain BZ0#2D0 while Tf/Do operands use BZ0-0 (or the
+    // reverse). Resolve equivalent names without rewriting PDF dictionaries
+    // or merging resources from different Form XObject scopes.
+    final String decodedKey = _decodeResourceName(key);
+    for (final String? resourceKey in resources.keys) {
+      if (resourceKey != null &&
+          _decodeResourceName(resourceKey) == decodedKey) {
+        return resourceKey;
+      }
+    }
+    return null;
   }
 }
