@@ -30,6 +30,9 @@ import 'control/enums.dart';
 import 'control/pagination.dart';
 import 'control/pdf_page_view.dart';
 import 'control/pdf_scrollable.dart';
+import 'control/pdf_trackpad_gesture_region.dart';
+import 'control/pdf_trackpad_momentum.dart';
+import 'control/pdf_trackpad_session.dart';
 import 'control/pdftextline.dart';
 import 'control/pdfviewer_callback_details.dart';
 import 'control/single_page_view.dart';
@@ -45,6 +48,8 @@ import 'form_fields/pdf_signature.dart';
 import 'form_fields/pdf_text_box.dart';
 import 'text_extraction/text_extraction.dart';
 import 'theme/theme.dart';
+
+part 'control/pdf_viewer_trackpad.dart';
 
 /// Signature for [SfPdfViewer.onTextSelectionChanged] callback.
 typedef PdfTextSelectionChangedCallback =
@@ -1221,6 +1226,18 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   PdfDocument? _document;
   bool _hasError = false;
   bool _panEnabled = true;
+  PdfTrackpadSession? _trackpadSession;
+  int? _trackpadPointer;
+  VelocityTracker? _trackpadVelocity;
+  bool _trackpadDidScale = false;
+  late final PdfTrackpadMomentum _trackpadMomentum = PdfTrackpadMomentum(
+    onUpdate: (offset) {
+      final Offset before = _pdfViewerController.scrollOffset;
+      _applyTrackpadViewport(_pdfViewerController.zoomLevel, offset);
+      return (_pdfViewerController.scrollOffset - before).distance > 0.000001;
+    },
+    onEnd: _getTileImage,
+  );
   bool _isMobileView = false;
   bool _isSearchStarted = false;
   bool _isKeyPadRaised = false;
@@ -1545,6 +1562,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _trackpadMomentum.dispose();
     bookmarkList.clear();
     helper.enableDefaultMenu();
     _getPdfFileCancellableOperation?.cancel();
@@ -1612,6 +1630,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 
   /// Reset when PDF path is changed.
   void _reset() {
+    _trackpadMomentum.stop();
+    _trackpadSession = null;
+    _trackpadPointer = null;
+    _trackpadVelocity = null;
     _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.canvasRenderBox
         ?.disposeMouseSelection();
     _isLoaded = false;
@@ -3623,7 +3645,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         _childKey.currentContext?.findRenderObject()?.paintBounds.size ??
         Size.zero;
     return isPdfLoaded
-        ? Listener(
+        ? _withTrackpadNavigation(Listener(
             onPointerSignal: _handlePointerSignal,
             onPointerDown: _handlePointerDown,
             onPointerMove: _handlePointerMove,
@@ -4028,7 +4050,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                 },
               ),
             ),
-          )
+          ))
         : (_isDecrypting
               ? _getEmptyLinearProgressView()
               : (_hasError
@@ -4293,6 +4315,9 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollInertiaCancelEvent || event is PointerScrollEvent) {
+      _trackpadMomentum.stop();
+    }
     if (!isBookmarkViewOpen) {
       _pdfScrollableStateKey.currentState?.receivedPointerSignal(event);
     }
@@ -4300,6 +4325,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   void _handlePointerDown(PointerDownEvent event) {
+    _trackpadMomentum.stop();
     _canInvokeOnTap = true;
     final Offset localPosition =
         _globalToLocal(event.position) ?? event.localPosition;
@@ -5758,6 +5784,11 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       }
     } else if (property == 'saveDocument') {
       _pdfViewerController._savedDocumentBytes = _saveDocument();
+    } else if (property == 'trackpadGesture') {
+      final PointerEvent? event = _pdfViewerController._trackpadEvent;
+      if (event != null) {
+        _handleTrackpadGesture(event);
+      }
     } else if (property == 'zoomLevel') {
       if (_pdfViewerController.zoomLevel > widget.maxZoomLevel) {
         _pdfViewerController.zoomLevel = widget.maxZoomLevel;
@@ -6690,6 +6721,19 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 class PdfViewerController extends ChangeNotifier with _ValueChangeNotifier {
   /// Zoom level
   double _zoomLevel = 1;
+
+  PointerEvent? _trackpadEvent;
+
+  /// Forwards native trackpad navigation from a region above editor overlays.
+  /// Pointer interruptions cancel momentum without claiming their gestures.
+  void handleTrackpadGesture(PointerEvent event) {
+    _trackpadEvent = event;
+    try {
+      _notifyPropertyChangedListeners(property: 'trackpadGesture');
+    } finally {
+      _trackpadEvent = null;
+    }
+  }
 
   /// Current page number
   int _currentPageNumber = 0;

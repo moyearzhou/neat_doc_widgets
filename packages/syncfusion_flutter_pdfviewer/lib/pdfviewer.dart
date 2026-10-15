@@ -42,3 +42,5 @@ export 'src/form_fields/pdf_radio_button.dart' show PdfRadioFormField;
 export 'src/form_fields/pdf_signature.dart' show PdfSignatureFormField;
 export 'src/form_fields/pdf_text_box.dart' show PdfTextFormField;
 export 'src/pdfviewer.dart';
+
+export 'src/control/pdf_trackpad_gesture_region.dart';

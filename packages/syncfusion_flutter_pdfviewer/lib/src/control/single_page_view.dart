@@ -154,6 +154,18 @@ class SinglePageViewState extends State<SinglePageView> {
   bool _setZoomLevel = false;
   final TextEditingController _textFieldController = TextEditingController();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final GlobalKey _trackpadViewportKey = GlobalKey();
+
+  /// Active page transform; the viewer-wide mirror can have different bounds.
+  TransformationController get trackpadTransform => _currentPageTransformationController;
+
+  /// Resolves the focal point inside the active page viewport, excluding
+  /// pagination/scrollbar margins around the page view.
+  Offset trackpadFocalPoint(Offset globalPosition) {
+    final RenderObject? render = _trackpadViewportKey.currentContext?.findRenderObject();
+    return render is RenderBox ? render.globalToLocal(globalPosition) : Offset.zero;
+  }
+
   final FocusNode _focusNode = FocusNode();
   Size _oldLayoutSize = Size.zero;
   double _panStartOffset = 0.0;
@@ -469,6 +481,8 @@ class SinglePageViewState extends State<SinglePageView> {
         pages.add(
           InteractiveScrollViewer(
             page,
+            key: pageIndex + 1 == widget.pdfViewerController.pageNumber
+                ? _trackpadViewportKey : null,
             clipBehavior: Clip.none,
             maxScale: widget.maxZoomLevel,
             // When using infinite boundary margins, we can transform the content in the InteractiveViewer to any location.
@@ -957,6 +971,30 @@ class SinglePageViewState extends State<SinglePageView> {
     setState(() {
       isScrollHeadDragged = false;
     });
+  }
+
+  /// Applies native trackpad navigation using the existing transform/bounds.
+  void applyTrackpadViewport(double zoom, Offset offset) {
+    previousZoomLevel = _currentPageTransformationController.value.getMaxScaleOnAxis();
+    currentZoomLevel = zoom;
+    // Pure scroll must not notify the transform as a unit-scale update first.
+    if (zoom != previousZoomLevel) {
+      _setZoomLevel = true;
+      final double factor = zoom / previousZoomLevel;
+      _currentPageTransformationController.value =
+          _currentPageTransformationController.value.clone()
+            ..scaleByDouble(factor, factor, factor, 1.0);
+    }
+    // Existing programmatic bounds use abs() for undersized documents;
+    // trackpad navigation must not pan into blank space at the minimum zoom.
+    final Size documentSize = widget.pdfPages[widget.pdfViewerController.pageNumber]!.pageSize;
+    final double maxX = (documentSize.width - widget.viewportDimension.width / zoom)
+        .clamp(0, double.infinity);
+    final double maxY = (documentSize.height - widget.viewportDimension.height / zoom)
+        .clamp(0, double.infinity);
+    _handlePdfOffsetChanged(Offset(offset.dx.clamp(0, maxX),
+        offset.dy.clamp(0, maxY)));
+    setState(() {});
   }
 
   /// Scale to PDF
