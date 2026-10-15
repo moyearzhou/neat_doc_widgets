@@ -491,6 +491,29 @@ class PdfScrollableState extends State<PdfScrollable> {
     }
   }
 
+  /// Applies native trackpad navigation using the existing transform/bounds.
+  void applyTrackpadViewport(double zoom, Offset offset) {
+    previousZoomLevel = _transformationController.value.getMaxScaleOnAxis();
+    currentZoomLevel = zoom;
+    // Pure scroll must not notify the transform as a unit-scale update first.
+    if (zoom != previousZoomLevel) {
+      _setZoomLevel = true;
+      final double factor = zoom / previousZoomLevel;
+      _transformationController.value =
+          _transformationController.value.clone()
+            ..scaleByDouble(factor, factor, factor, 1.0);
+    }
+    // Existing programmatic bounds use abs() for undersized documents;
+    // trackpad navigation must not pan into blank space at the minimum zoom.
+    final Size documentSize = widget.pdfDimension;
+    final double maxX = (documentSize.width - widget.viewportDimension.width / zoom)
+        .clamp(0, double.infinity);
+    final double maxY = (documentSize.height - widget.viewportDimension.height / zoom)
+        .clamp(0, double.infinity);
+    _handlePdfOffsetChanged(Offset(offset.dx.clamp(0, maxX),
+        offset.dy.clamp(0, maxY)));
+  }
+
   /// Scale to PDF
   double scaleTo(double zoomLevel, {bool isZoomed = true}) {
     currentZoomLevel = _transformationController.value.getMaxScaleOnAxis();
