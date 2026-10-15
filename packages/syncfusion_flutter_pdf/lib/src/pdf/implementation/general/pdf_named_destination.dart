@@ -135,8 +135,14 @@ class PdfNamedDestination implements IPdfWrapper {
               _destination!.mode = PdfDestinationMode.fitH;
             }
           } else if (mode.name == 'XYZ' && destination.count > 3) {
-            final PdfNumber? left = destination[2] as PdfNumber?;
-            final PdfNumber? top = destination[3] as PdfNumber?;
+            final PdfNumber? left =
+                (destination[2] is PdfNumber)
+                    ? destination[2]! as PdfNumber
+                    : null;
+            final PdfNumber? top =
+                (destination[3] is PdfNumber)
+                    ? destination[3]! as PdfNumber
+                    : null;
             PdfNumber? zoom;
             if (destination.count > 4 && destination[4] is PdfNumber) {
               zoom = destination[4]! as PdfNumber;

@@ -163,11 +163,13 @@ class PdfRadioButtonListField extends PdfField {
   PdfRadioButtonItemCollection _getRadioButtonListItems(
     PdfRadioButtonItemCollection listItems,
   ) {
-    final PdfArray? fieldKids = _helper.obtainKids();
+    PdfArray? fieldKids = _helper.obtainKids();
     if (fieldKids != null) {
       for (int i = 0; i < fieldKids.count; i++) {
         final IPdfPrimitive? kidsDict = PdfCrossTable.dereference(fieldKids[i]);
-        if (kidsDict != null && kidsDict is PdfDictionary) {
+        if (kidsDict != null &&
+            kidsDict is PdfDictionary &&
+            _helper.crossTable != null) {
           final PdfRadioButtonListItem item =
               PdfRadioButtonListItemHelper.loaded(
                 kidsDict,
@@ -177,6 +179,63 @@ class PdfRadioButtonListField extends PdfField {
           PdfRadioButtonItemCollectionHelper.getHelper(
             listItems,
           ).doAdd(item, true);
+        }
+      }
+    } else {
+      bool isKidsAdded = false;
+      // If no direct /Kids, check if this field has a /Parent
+      if (_helper.dictionary != null &&
+          _helper.dictionary!.containsKey(PdfDictionaryProperties.parent)) {
+        final IPdfPrimitive? parentDictionary = PdfCrossTable.dereference(
+          _helper.dictionary![PdfDictionaryProperties.parent],
+        );
+        if (parentDictionary != null &&
+            parentDictionary is PdfDictionary &&
+            parentDictionary.containsKey(PdfDictionaryProperties.kids) &&
+            parentDictionary.containsKey(PdfDictionaryProperties.ft) &&
+            parentDictionary[PdfDictionaryProperties.kids] is PdfArray &&
+            parentDictionary[PdfDictionaryProperties.ft] != null &&
+            (parentDictionary[PdfDictionaryProperties.ft]! as PdfName).name ==
+                PdfDictionaryProperties.btn) {
+          fieldKids =
+              parentDictionary[PdfDictionaryProperties.kids] as PdfArray?;
+          if (fieldKids != null) {
+            for (int i = 0; i < fieldKids.count; i++) {
+              final IPdfPrimitive? kidsDictionary = PdfCrossTable.dereference(
+                fieldKids[i],
+              );
+              if (kidsDictionary != null &&
+                  kidsDictionary is PdfDictionary &&
+                  _helper.crossTable != null) {
+                final PdfRadioButtonListItem item =
+                    PdfRadioButtonListItemHelper.loaded(
+                      kidsDictionary,
+                      _helper.crossTable!,
+                      this,
+                    );
+                PdfRadioButtonItemCollectionHelper.getHelper(
+                  listItems,
+                ).doAdd(item, true);
+                isKidsAdded = true;
+              }
+            }
+          }
+        }
+      }
+      if (fieldKids == null || !isKidsAdded) {
+        // Load an item directly from this field's dictionary
+        if (_helper.dictionary != null && _helper.crossTable != null) {
+          final PdfRadioButtonListItem item =
+              PdfRadioButtonListItemHelper.loaded(
+                _helper.dictionary!,
+                _helper.crossTable!,
+                this,
+              );
+          if (item.value.isNotEmpty) {
+            PdfRadioButtonItemCollectionHelper.getHelper(
+              listItems,
+            ).doAdd(item, true);
+          }
         }
       }
     }

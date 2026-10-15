@@ -70,5 +70,7 @@ dependencies:
   syncfusion_pdfviewer_windows: ^33.1.47
   syncfusion_pdfviewer_linux: ^33.1.47
   syncfusion_flutter_core: ^33.1.47
-  syncfusion_flutter_pdf: ^33.1.47
+  # Resolve text geometry through the patched sibling package on both SDK branches.
+  syncfusion_flutter_pdf:
+    path: ../syncfusion_flutter_pdf
   syncfusion_flutter_signaturepad: ^33.1.47
