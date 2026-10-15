@@ -22,6 +22,8 @@ import 'pdf_scrollable.dart';
 import 'pdfviewer_canvas.dart';
 import 'single_page_view.dart';
 
+part 'pdf_page_raster.dart';
+
 /// Wrapper class of [Image] widget which shows the PDF pages as an image
 class PdfPageView extends StatefulWidget {
   /// Constructs PdfPageView instance with the given parameters.
@@ -225,9 +227,6 @@ class PdfPageViewState extends State<PdfPageView> {
   int _consecutiveTaps = 1;
   final double _jumpOffset = 10.0;
 
-  int _imageWidth = 0;
-  int _imageHeight = 0;
-
   /// Mouse cursor for mouse region widget
   SystemMouseCursor _cursor = SystemMouseCursors.basic;
 
@@ -262,6 +261,27 @@ class PdfPageViewState extends State<PdfPageView> {
   double _dpr = 1.0;
   int _numberOfActivePointers = 0;
   bool _isZooming = false;
+  bool _rasterizationSuspended = false;
+  bool _pageRasterRunning = false;
+  double? _runningPageZoom;
+  int? _runningPageGeneration;
+  int _rasterGeneration = 0;
+  ({Size viewport, double zoom})? _pendingPageRaster;
+
+  void _replacePageRaster(ui.Image image, double imageFactor) {
+    final ui.Image? previous = _pdfPage?.image;
+    setState(() {
+      _previousImageFactor = imageFactor;
+      _pdfPage = RawImage(image: image, fit: BoxFit.fill);
+    });
+    _disposeImageAfterFrame(previous);
+  }
+
+  /// Retains the current bitmap until trackpad navigation ends.
+  void suspendRasterization() => _suspendRasterization();
+
+  /// Allows the final visible viewport to request a fresh image.
+  void resumeRasterization() => _resumeRasterization();
 
   @override
   void initState() {
@@ -904,72 +924,6 @@ class PdfPageViewState extends State<PdfPageView> {
         widget.pdfPages[widget.pageIndex + 1]!.pageSize.height;
   }
 
-  Future<void> _getImage(Size viewportSize, double zoomLevel) async {
-    _calculateHeightPercentage();
-    final Size originalPageSize =
-        widget.pdfDocument!.pages[widget.pageIndex].size;
-    final double ratio = 1 / _heightPercentage;
-    final double imageFactor = ratio * zoomLevel;
-    if (widget.pdfDocument != null && _previousImageFactor != imageFactor) {
-      _previousImageFactor = imageFactor;
-      if (ratio < 0.5 ||
-          zoomLevel > 1.75 ||
-          (!kIsDesktop && imageFactor > 2) ||
-          (kIsDesktop && imageFactor > 4)) {
-        _isTile = true;
-        if (_pdfPage != null) {
-          return;
-        }
-
-        // This condition checks if the original image size in bytes (width * height * 4) is
-        // less than or equal to 5 MB (5 * 1024 * 1024 bytes). The factor of 4 accounts for
-        // the RGBA channels (4 bytes per pixel). If the image size is within this limit,
-        // we use the original dimensions; otherwise, we adjust to the widget's dimensions.
-        if (originalPageSize.width * originalPageSize.height * 4 <=
-            5 * 1024 * 1024) {
-          _imageWidth = originalPageSize.width.toInt();
-          _imageHeight = originalPageSize.height.toInt();
-        } else {
-          _imageWidth = widget.width.toInt();
-          _imageHeight = widget.height.toInt();
-        }
-      } else {
-        _tileImageCache = null;
-        _isTile = false;
-        _imageWidth = (widget.width * zoomLevel * _dpr).toInt();
-        _imageHeight = (widget.height * zoomLevel * _dpr).toInt();
-      }
-
-      try {
-        _pageImageOperation = CancelableOperation<Uint8List?>.fromFuture(
-          PdfViewerPlatform.instance.getPage(
-            widget.pageIndex + 1,
-            _imageWidth,
-            _imageHeight,
-            widget.documentID,
-          ),
-        );
-        await _pageImageOperation?.value.then((Uint8List? pageImage) {
-          if (pageImage != null) {
-            _createImage(pageImage, _imageWidth, _imageHeight).then((
-              ui.Image image,
-            ) {
-              if (mounted) {
-                setState(() {
-                  _pdfPage = RawImage(image: image, fit: BoxFit.fill);
-                });
-              }
-            });
-          }
-        });
-      } catch (_) {
-      } finally {
-        _pageImageOperation?.cancel();
-        _pageImageOperation = null;
-      }
-    }
-  }
-
   /// Method to rebuild the widget
   void rebuild() {
     if (mounted) {
@@ -997,20 +951,6 @@ class PdfPageViewState extends State<PdfPageView> {
         widget.pdfViewerController.addAnnotation(annotation);
       }
     }
-  }
-
-  /// Create image from the given raw pixels
-  Future<ui.Image> _createImage(Uint8List pixels, int width, int height) {
-    final Completer<ui.Image> comp = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
-      pixels,
-      width,
-      height,
-      ui.PixelFormat.rgba8888,
-      (ui.Image image) => comp.complete(image),
-    );
-
-    return comp.future;
   }
 
   void _onPageTapped(PointerEvent event) {
@@ -1044,8 +984,12 @@ class PdfPageViewState extends State<PdfPageView> {
     Size viewportSize,
     double zoomLevel,
   ) async {
-    _getImage(viewportSize, zoomLevel);
-    if (!_isTile) {
+    if (_rasterizationSuspended || _tileImageOperation != null) {
+      return;
+    }
+    await _getImage(viewportSize, zoomLevel);
+    if (!mounted || _rasterizationSuspended || !_isTile ||
+        _tileImageOperation != null) {
       return;
     }
     final Offset offset =
@@ -1113,12 +1057,14 @@ class PdfPageViewState extends State<PdfPageView> {
       double ratio = 1 / _heightPercentage;
       ratio = ratio < 1 && kIsDesktop ? 1 : ratio;
       if (zoomLevel == transformationController.value[0]) {
+        CancelableOperation<Uint8List?>? operation;
+        final int generation = _rasterGeneration;
         try {
           final Size tileImageSize = Size(
             exposed.width * _dpr * ratio,
             exposed.height * _dpr * ratio,
           );
-          _tileImageOperation = CancelableOperation<Uint8List?>.fromFuture(
+          operation = CancelableOperation<Uint8List?>.fromFuture(
             PdfViewerPlatform.instance.getTileImage(
               widget.pageIndex + 1,
               zoomLevel * _dpr * ratio,
@@ -1129,43 +1075,45 @@ class PdfPageViewState extends State<PdfPageView> {
               widget.documentID,
             ),
           );
-          final Future<Uint8List?> imageFuture = _tileImageOperation!.value;
-          await imageFuture.then((Uint8List? tileImage) {
-            if (tileImage != null &&
-                zoomLevel == transformationController.value[0]) {
-              _createImage(
-                tileImage,
-                tileImageSize.width.toInt(),
-                tileImageSize.height.toInt(),
-              ).then((ui.Image image) {
-                if (mounted) {
-                  setState(() {
-                    _tileImageCache = TileImage(
-                      widget.pageIndex,
-                      tileImage,
-                      Rect.fromLTWH(
-                        exposed.left / zoomLevel,
-                        exposed.top / zoomLevel,
-                        exposed.width / zoomLevel,
-                        exposed.height / zoomLevel,
-                      ),
-                      tileImageSize,
-                    );
-                    _tileImage = RawImage(
-                      image: image,
-                      width: tileImageSize.width,
-                      height: tileImageSize.height,
-                      fit: BoxFit.fill,
-                    );
-                  });
-                }
-              });
-            }
+          _tileImageOperation = operation;
+          final Uint8List? tileImage = await operation.valueOrCancellation();
+          if (tileImage == null || !mounted || _rasterizationSuspended ||
+              generation != _rasterGeneration ||
+              zoomLevel != transformationController.value[0]) {
+            return;
+          }
+          final ui.Image image = await _createImage(
+            tileImage, tileImageSize.width.toInt(), tileImageSize.height.toInt());
+          if (!mounted || _rasterizationSuspended ||
+              generation != _rasterGeneration ||
+              zoomLevel != transformationController.value[0]) {
+            image.dispose();
+            return;
+          }
+          final ui.Image? previous = _tileImage?.image;
+          setState(() {
+            _tileImageCache = TileImage(
+              widget.pageIndex, tileImage,
+              Rect.fromLTWH(exposed.left / zoomLevel, exposed.top / zoomLevel,
+                  exposed.width / zoomLevel, exposed.height / zoomLevel),
+              tileImageSize,
+            );
+            _tileImage = RawImage(image: image, width: tileImageSize.width,
+                height: tileImageSize.height, fit: BoxFit.fill);
           });
+          _disposeImageAfterFrame(previous);
         } catch (_) {
         } finally {
-          _tileImageOperation?.cancel();
-          _tileImageOperation = null;
+          if (identical(_tileImageOperation, operation)) {
+            _tileImageOperation = null;
+            // A gesture can end while this native tile request is still running.
+            if (mounted && !_rasterizationSuspended &&
+                (generation != _rasterGeneration ||
+                    zoomLevel != transformationController.value[0])) {
+              unawaited(getTileImage(transformationController, viewportSize,
+                  transformationController.value[0]));
+            }
+          }
         }
       }
     }
@@ -1173,19 +1121,30 @@ class PdfPageViewState extends State<PdfPageView> {
 
   /// Get the page image
   void getPageImage(Size viewportSize, double zoomLevel) {
-    _pageTimer ??= Timer(Durations.short2, () {
-      if (widget.pdfPages.isEmpty) {
-        return;
+    if (_rasterizationSuspended) {
+      return;
+    }
+    // Debounce intermediate zooms and capture the latest requested viewport.
+    _pageTimer?.cancel();
+    _pageTimer = Timer(Durations.short2, () {
+      _pageTimer = null;
+      if (mounted && widget.pdfPages.isNotEmpty) {
+        _getImage(viewportSize, zoomLevel);
       }
-      _getImage(viewportSize, zoomLevel).then((_) {
-        _pageTimer = null;
-        _pageImageOperation = null;
-      });
     });
+  }
+
+  void _disposeImageAfterFrame(ui.Image? image) {
+    if (image != null) {
+      // RawImage can still paint its previous image before the next rebuild.
+      WidgetsBinding.instance.addPostFrameCallback((_) => image.dispose());
+    }
   }
 
   /// Clear the page image
   void clearPageImage({bool dispose = false}) {
+    _rasterGeneration++;
+    _pendingPageRaster = null;
     final bool hasImage = _pdfPage != null || _tileImage != null;
     _pdfPage?.image?.dispose();
     _tileImage?.image?.dispose();

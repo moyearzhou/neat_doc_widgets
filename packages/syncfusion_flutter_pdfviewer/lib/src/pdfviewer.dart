@@ -4086,10 +4086,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       final double y = offset.dy;
 
       final Rect viewportRect = Rect.fromLTWH(
-        x - _viewportSize.width,
-        y - _viewportSize.height,
-        3 * _viewportSize.width,
-        3 * _viewportSize.height,
+        x,
+        y,
+        _viewportSize.width / zoomLevel,
+        _viewportSize.height / zoomLevel,
       );
       final int cacheStart =
           (_pdfViewerController.pageNumber - _pageImageCacheRadius).clamp(
@@ -4136,7 +4136,9 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
             );
           }
         }
-        pageState?.getPageImage(_viewportSize, zoomLevel);
+        if (_renderedImages.contains(pageNumber)) {
+          pageState?.getPageImage(_viewportSize, zoomLevel);
+        }
       }
     }
   }
@@ -4590,6 +4592,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   Future<void> _getTileImage() async {
+    // Native trackpad updates transform the cached bitmap until release.
+    if (_trackpadSession != null && _trackpadDidScale) {
+      return;
+    }
     if (kIsWeb || !Platform.environment.containsKey('FLUTTER_TEST')) {
       if (_tileTimer != null && _tileTimer!.isActive) {
         _tileTimer?.cancel();
@@ -4597,6 +4603,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       }
       _checkVisiblePages();
       _tileTimer ??= Timer(Durations.medium4, () async {
+        if ((_trackpadSession != null && _trackpadDidScale) || !mounted) {
+          _tileTimer = null;
+          return;
+        }
         _checkVisiblePages();
         final double zoomLevel = _transformationController.value[0];
         if (_pageLayoutMode == PdfPageLayoutMode.continuous) {
