@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import '../../interfaces/pdf_interface.dart';
+import '../drawing/drawing.dart';
 import '../io/pdf_constants.dart';
 import '../io/pdf_cross_table.dart';
 import '../pages/pdf_page.dart';
@@ -134,6 +135,8 @@ class PdfNamedDestination implements IPdfWrapper {
               _destination = PdfDestination(page, Offset(0, topValue));
               _destination!.mode = PdfDestinationMode.fitH;
             }
+          } else if (mode.name == PdfDictionaryProperties.fitR) {
+            _destination = _obtainFitRDestination(page, destination);
           } else if (mode.name == 'XYZ' && destination.count > 3) {
             final PdfNumber? left =
                 (destination[2] is PdfNumber)
@@ -167,6 +170,35 @@ class PdfNamedDestination implements IPdfWrapper {
       }
     }
     return _destination;
+  }
+
+  PdfDestination? _obtainFitRDestination(PdfPage? page, PdfArray array) {
+    if (page == null || array.count < 6) {
+      return null;
+    }
+    final List<double> coordinates = <double>[];
+    for (int index = 2; index < 6; index++) {
+      final IPdfPrimitive? value = _crossTable.getObject(array[index]);
+      if (value is! PdfNumber ||
+          value.value == null ||
+          !value.value!.isFinite) {
+        return null;
+      }
+      coordinates.add(value.value!.toDouble());
+    }
+    final double left = coordinates[0];
+    final double bottom = coordinates[1];
+    final double right = coordinates[2];
+    final double top = coordinates[3];
+    // FitR serializes raw PDF left/bottom/right/top values through _bounds.
+    // Viewer navigation instead needs a page-local, top-left origin location.
+    final PdfDestination destination = PdfDestinationHelper.getDestination(
+      page,
+      PdfRectangle(left, bottom, right, top),
+    );
+    destination.mode = PdfDestinationMode.fitR;
+    destination.location = Offset(left, page.size.height - top);
+    return destination;
   }
 }
 
