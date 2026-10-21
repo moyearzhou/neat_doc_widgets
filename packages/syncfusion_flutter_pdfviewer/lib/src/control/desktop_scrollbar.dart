@@ -1,21 +1,11 @@
 import 'dart:async';
-import 'dart:math' show max;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Default width of the scrollbar
-const double _scrollbarWidth = 8;
+import 'pdf_scrollbar.dart';
 
-/// Minimum length of the scrollbar
-const double _scrollbarLength = 50;
-
-/// Default padding around the scrollbar
-const double _scrollbarPadding = 1;
-
-/// A custom scrollbar implementation for desktop applications.
-///
-/// This widget provides customizable horizontal and vertical scrollbars
-/// that can fade in/out based on user interaction.
+/// Viewport scrollbars backed by the viewer's transformation controller.
 class DesktopScrollbar extends StatefulWidget {
   const DesktopScrollbar({
     super.key,
@@ -23,7 +13,6 @@ class DesktopScrollbar extends StatefulWidget {
     this.canShowVerticalScrollbar = true,
     this.canFadeHorizontalScrollbar = true,
     this.canFadeVerticalScrollbar = true,
-    this.fadeOutDuration = const Duration(seconds: 2),
     required this.controller,
     required this.viewportSize,
     required this.contentSize,
@@ -33,357 +22,294 @@ class DesktopScrollbar extends StatefulWidget {
     this.onHorizontalDragStart,
     this.onHorizontalDragUpdate,
     this.onHorizontalDragEnd,
-    this.verticalScrollbarPadding = const EdgeInsets.only(
-      right: _scrollbarPadding,
-    ),
-    this.horizontalScrollbarPadding = const EdgeInsets.only(
-      bottom: _scrollbarPadding,
-    ),
+    this.verticalScrollbarPadding = const EdgeInsets.only(right: 1),
+    this.horizontalScrollbarPadding = const EdgeInsets.only(bottom: 1),
+    this.settings = const PdfScrollbarSettings(),
+    this.thumbBuilder,
+    this.pageNumber = 0,
+    this.pageCount = 0,
   });
 
-  /// Controller that manages the viewport transformation
   final TransformationController controller;
-
-  /// Size of the visible viewport
   final Size viewportSize;
-
-  /// Size of the total content area
   final Size contentSize;
-
-  /// Whether to show the horizontal scrollbar
   final bool canShowHorizontalScrollbar;
-
-  /// Whether to show the vertical scrollbar
   final bool canShowVerticalScrollbar;
-
-  /// Whether the horizontal scrollbar can fade out when inactive
   final bool canFadeHorizontalScrollbar;
-
-  /// Whether the vertical scrollbar can fade out when inactive
   final bool canFadeVerticalScrollbar;
-
-  /// Duration after which scrollbars fade out when inactive
-  final Duration fadeOutDuration;
-
-  /// Padding for the vertical scrollbar
   final EdgeInsets verticalScrollbarPadding;
-
-  /// Padding for the horizontal scrollbar
   final EdgeInsets horizontalScrollbarPadding;
-
-  /// Callback for vertical drag start events
+  final PdfScrollbarSettings settings;
+  final PdfScrollThumbBuilder? thumbBuilder;
+  final int pageNumber;
+  final int pageCount;
   final void Function(DragStartDetails)? onVerticalDragStart;
-
-  /// Callback for vertical drag update events
   final void Function(DragUpdateDetails)? onVerticalDragUpdate;
-
-  /// Callback for vertical drag end events
   final void Function(DragEndDetails)? onVerticalDragEnd;
-
-  /// Callback for horizontal drag start events
   final void Function(DragStartDetails)? onHorizontalDragStart;
-
-  /// Callback for horizontal drag update events
   final void Function(DragUpdateDetails)? onHorizontalDragUpdate;
-
-  /// Callback for horizontal drag end events
   final void Function(DragEndDetails)? onHorizontalDragEnd;
 
   @override
   State<DesktopScrollbar> createState() => _DesktopScrollbarState();
 }
 
-class _DesktopScrollbarState extends State<DesktopScrollbar>
-    with SingleTickerProviderStateMixin {
-  /// The calculated length of the vertical scrollbar
-  late double _verticalScrollbarLength;
-
-  /// The calculated length of the horizontal scrollbar
-  late double _horizontalScrollbarLength;
-
-  /// Ratio of viewport width to content width for scrollbar positioning
-  late double _widthRatio;
-
-  /// Ratio of viewport height to content height for scrollbar positioning
-  late double _heightRatio;
-
-  /// Top position of the vertical scrollbar
-  late double _top;
-
-  /// Left position of the horizontal scrollbar
-  late double _left;
-
-  /// Maximum vertical scroll limit
-  late double _verticalLimit;
-
-  /// Maximum horizontal scroll limit
-  late double _horizontalLimit;
-
-  /// Whether the vertical scrollbar should be visible
-  bool _canShowVerticalScrollbar = false;
-
-  /// Whether the horizontal scrollbar should be visible
-  bool _canShowHorizontalScrollbar = false;
-
-  /// Key for the vertical scrollbar widget
-  final ValueKey<String> _verticalScrollbarKey = const ValueKey(
-    'vertical_scrollbar',
-  );
-
-  /// Key for the horizontal scrollbar widget
-  final ValueKey<String> _horizontalScrollbarKey = const ValueKey(
-    'horizontal_scrollbar',
-  );
-
-  /// Controller for the scrollbar fade animation
-  late final AnimationController _animationController;
-
-  /// Animation that controls the opacity of scrollbars when fading out
-  late final Animation<double> _fadeOutAnimation;
-
-  /// Whether the mouse is currently hovering over a scrollbar
-  bool _isHovering = false;
-
-  /// Whether the content is currently being scrolled
-  bool _isScrolling = false;
-
-  /// Timer that tracks when to fade out scrollbars after scrolling stops
+class _DesktopScrollbarState extends State<DesktopScrollbar> {
   Timer? _scrollTimer;
+  Axis? _hoveredAxis;
+  Axis? _draggingAxis;
+  bool _isScrolling = false;
 
   @override
   void initState() {
     super.initState();
-    // Initialize the animation controller for fade effects
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-      reverseDuration: Duration.zero,
-    );
-    // Create the fade out animation
-    _fadeOutAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
-    );
-    // Listen for scroll events
     widget.controller.addListener(_onScroll);
   }
 
   @override
+  void didUpdateWidget(DesktopScrollbar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onScroll);
+      widget.controller.addListener(_onScroll);
+    }
+  }
+
+  @override
   void dispose() {
-    // Clean up resources
     widget.controller.removeListener(_onScroll);
     _scrollTimer?.cancel();
-    _animationController.dispose();
     super.dispose();
   }
 
-  /// Handles scroll events from the controller
   void _onScroll() {
     if (!_isScrolling) {
-      _isScrolling = true;
-      _updateScrollbarVisibility();
+      setState(() => _isScrolling = true);
     }
     _startFadeOutTimer();
   }
 
-  /// Starts or resets the timer for fading out scrollbars
   void _startFadeOutTimer() {
     _scrollTimer?.cancel();
-    _scrollTimer = Timer(widget.fadeOutDuration, () {
-      _isScrolling = false;
-      _isHovering = false;
-      _updateScrollbarVisibility();
+    _scrollTimer = Timer(widget.settings.fadeOutDelay, () {
+      if (mounted) {
+        setState(() => _isScrolling = false);
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    assert(widget.settings.debugIsValid);
     return ValueListenableBuilder<Matrix4>(
       valueListenable: widget.controller,
-      builder: (BuildContext context, Matrix4 matrix, _) {
-        final double scale = widget.controller.value[0];
-        final Offset offset = widget.controller.toScene(Offset.zero);
-
-        // Determine if scrollbars should be visible based on content and viewport sizes
-        _canShowVerticalScrollbar =
-            widget.canShowVerticalScrollbar &&
-            widget.contentSize.height * scale > widget.viewportSize.height;
-        _canShowHorizontalScrollbar =
-            widget.canShowHorizontalScrollbar &&
-            widget.contentSize.width * scale > widget.viewportSize.width;
-
-        Widget verticalScrollbar = const SizedBox.shrink();
-        Widget horizontalScrollbar = const SizedBox.shrink();
-        if (_canShowHorizontalScrollbar) {
-          // Calculate maximum horizontal scroll limit
-          _horizontalLimit =
-              widget.contentSize.width - (widget.viewportSize.width / scale);
-
-          // Calculate the ratio of viewport to scaled content
-          final double viewportToContentRatio =
-              widget.viewportSize.width / (widget.contentSize.width * scale);
-
-          // Calculate scrollbar length based on the viewport ratio
-          final double calculatedLength =
-              widget.viewportSize.width * viewportToContentRatio;
-
-          // Ensure scrollbar has at least the minimum length
-          _horizontalScrollbarLength = max(_scrollbarLength, calculatedLength);
-
-          // Calculate position ratio for scrollbar movement
-          _widthRatio =
-              (widget.viewportSize.width - _horizontalScrollbarLength) /
-              _horizontalLimit;
-
-          // Calculate left position of the scrollbar
-          _left = (offset.dx * _widthRatio).clamp(
-            0.0,
-            widget.viewportSize.width - _horizontalScrollbarLength,
-          );
-
-          horizontalScrollbar = Align(
-            alignment: Alignment.bottomLeft,
-            child: GestureDetector(
-              onHorizontalDragStart: widget.onHorizontalDragStart,
-              onHorizontalDragEnd: widget.onHorizontalDragEnd,
-              onHorizontalDragUpdate: (DragUpdateDetails details) {
-                // Convert drag delta to content scroll delta
-                final double dx = details.primaryDelta! / _widthRatio;
-                widget.controller.value =
-                    widget.controller.value.clone()
-                      ..translateByDouble(-dx, 0.0, 0.0, 1.0);
-                widget.onHorizontalDragUpdate?.call(details);
-              },
-              child: Container(
-                width: _horizontalScrollbarLength,
-                height: _scrollbarWidth,
-                margin: EdgeInsets.only(left: _left),
-                decoration: BoxDecoration(
-                  color: Colors.grey,
-                  borderRadius: BorderRadius.circular(_scrollbarWidth / 2),
-                ),
-              ),
-            ),
-          );
-
-          if (widget.canFadeHorizontalScrollbar) {
-            horizontalScrollbar = FadeTransition(
-              opacity: _fadeOutAnimation,
-              child: horizontalScrollbar,
-            );
-          }
-        }
-
-        if (_canShowVerticalScrollbar) {
-          // Calculate maximum vertical scroll limit
-          _verticalLimit =
-              widget.contentSize.height - (widget.viewportSize.height / scale);
-
-          // Calculate the ratio of viewport to scaled content
-          final double viewportToContentRatio =
-              widget.viewportSize.height / (widget.contentSize.height * scale);
-
-          // Calculate scrollbar length based on the viewport ratio
-          final double calculatedLength =
-              widget.viewportSize.height * viewportToContentRatio;
-
-          // Ensure scrollbar has at least the minimum length
-          _verticalScrollbarLength = max(_scrollbarLength, calculatedLength);
-
-          // Calculate position ratio for scrollbar movement
-          _heightRatio =
-              (widget.viewportSize.height - _verticalScrollbarLength) /
-              _verticalLimit;
-
-          // Calculate top position of the scrollbar
-          _top = (offset.dy * _heightRatio).clamp(
-            0.0,
-            widget.viewportSize.height - _verticalScrollbarLength,
-          );
-
-          verticalScrollbar = Align(
-            alignment: Alignment.topRight,
-            child: GestureDetector(
-              onVerticalDragStart: widget.onVerticalDragStart,
-              onVerticalDragEnd: widget.onVerticalDragEnd,
-              onVerticalDragUpdate: (DragUpdateDetails details) {
-                // Convert drag delta to content scroll delta
-                final double dy = details.primaryDelta! / _heightRatio;
-                widget.controller.value =
-                    widget.controller.value.clone()
-                      ..translateByDouble(0.0, -dy, 0.0, 1.0);
-                widget.onVerticalDragUpdate?.call(details);
-              },
-              child: Container(
-                width: _scrollbarWidth,
-                height: _verticalScrollbarLength,
-                margin: EdgeInsets.only(top: _top),
-                decoration: BoxDecoration(
-                  color: Colors.grey,
-                  borderRadius: BorderRadius.circular(_scrollbarWidth / 2),
-                ),
-              ),
-            ),
-          );
-
-          if (widget.canFadeVerticalScrollbar) {
-            verticalScrollbar = FadeTransition(
-              opacity: _fadeOutAnimation,
-              child: verticalScrollbar,
-            );
-          }
-        }
-
+      builder: (BuildContext context, Matrix4 matrix, Widget? child) {
         return Stack(
           children: <Widget>[
-            if (_canShowHorizontalScrollbar)
-              Positioned(
-                key: _horizontalScrollbarKey,
-                left: 0,
-                bottom: widget.horizontalScrollbarPadding.bottom,
-                width: widget.viewportSize.width,
-                height: 1.5 * _scrollbarWidth,
-                child: MouseRegion(
-                  hitTestBehavior: HitTestBehavior.translucent,
-                  cursor: SystemMouseCursors.basic,
-                  onEnter: (_) {
-                    _isHovering = true;
-                    _updateScrollbarVisibility();
-                  },
-                  onExit: (_) => _startFadeOutTimer(),
-                  child: horizontalScrollbar,
-                ),
-              ),
-            if (_canShowVerticalScrollbar)
-              Positioned(
-                key: _verticalScrollbarKey,
-                right: widget.verticalScrollbarPadding.right,
-                top: 0,
-                width: 1.5 * _scrollbarWidth,
-                height: widget.viewportSize.height,
-                child: MouseRegion(
-                  hitTestBehavior: HitTestBehavior.translucent,
-                  cursor: SystemMouseCursors.basic,
-                  onEnter: (_) {
-                    _isHovering = true;
-                    _updateScrollbarVisibility();
-                  },
-                  onExit: (_) => _startFadeOutTimer(),
-                  child: verticalScrollbar,
-                ),
-              ),
+            if (widget.canShowHorizontalScrollbar &&
+                widget.settings.showHorizontalScrollbar)
+              _buildScrollbar(context, Axis.horizontal),
+            if (widget.canShowVerticalScrollbar &&
+                widget.settings.showVerticalScrollbar)
+              _buildScrollbar(context, Axis.vertical),
           ],
         );
       },
     );
   }
 
-  /// Updates the scrollbar visibility based on hovering and scrolling states.
-  /// Shows scrollbars when user is interacting with them, hides when inactive.
-  void _updateScrollbarVisibility() {
-    if (_isScrolling || _isHovering) {
-      _animationController.reverse();
-    } else {
-      _animationController.forward();
+  Widget _buildScrollbar(BuildContext context, Axis axis) {
+    final bool vertical = axis == Axis.vertical;
+    final double scale = widget.controller.value.getMaxScaleOnAxis();
+    final double viewport =
+        vertical ? widget.viewportSize.height : widget.viewportSize.width;
+    final double content =
+        vertical ? widget.contentSize.height : widget.contentSize.width;
+    if (scale <= 0 ||
+        !scale.isFinite ||
+        viewport <= 0 ||
+        content * scale <= viewport) {
+      return const SizedBox.shrink();
     }
+    final EdgeInsets padding =
+        widget.settings.padding ??
+        (vertical
+            ? widget.verticalScrollbarPadding
+            : widget.horizontalScrollbarPadding);
+    final double track = math.max(
+      0,
+      viewport - (vertical ? padding.vertical : padding.horizontal),
+    );
+    final double crossSpace = math.max(
+      0,
+      (vertical ? widget.viewportSize.width : widget.viewportSize.height) -
+          (vertical ? padding.horizontal : padding.vertical),
+    );
+    final double thickness = math.min(
+      widget.settings.thickness ?? 8,
+      crossSpace,
+    );
+    // Both ends must remain reachable even when the minimum thumb length exceeds
+    // a tiny viewport. A zero travel has no valid drag-to-content ratio.
+    final double length = math.min(
+      track,
+      math.max(
+        widget.settings.minThumbLength ?? 50,
+        track * viewport / (content * scale),
+      ),
+    );
+    final double travel = math.max(0, track - length);
+    final double contentExtent = content - viewport / scale;
+    final Offset scene = widget.controller.toScene(Offset.zero);
+    final double sceneOffset = vertical ? scene.dy : scene.dx;
+    final double position =
+        (sceneOffset / contentExtent).clamp(0.0, 1.0) * travel;
+    final Size size =
+        vertical ? Size(thickness, length) : Size(length, thickness);
+    final bool dragging = _draggingAxis == axis;
+    final bool hovered = _hoveredAxis == axis;
+    final bool canFade =
+        widget.settings.autoHide ??
+        (vertical
+            ? widget.canFadeVerticalScrollbar
+            : widget.canFadeHorizontalScrollbar);
+    final bool visible = !canFade || dragging || hovered || _isScrolling;
+    final Widget defaultThumb = DecoratedBox(
+      decoration: BoxDecoration(
+        color: widget.settings.thumbColor ?? Colors.grey,
+        borderRadius: BorderRadius.all(
+          widget.settings.radius ?? Radius.circular(thickness / 2),
+        ),
+      ),
+    );
+    final PdfScrollThumbDetails details = PdfScrollThumbDetails(
+      axis: axis,
+      size: size,
+      pageNumber: widget.pageNumber,
+      pageCount: widget.pageCount,
+      isScrollHead: false,
+      isDragging: dragging,
+      isHovered: hovered,
+    );
+    final double hitThickness = math.min(crossSpace, thickness * 1.5);
+    return Positioned(
+      key: ValueKey<String>(
+        vertical ? 'vertical_scrollbar' : 'horizontal_scrollbar',
+      ),
+      top: vertical ? padding.top + position : null,
+      left: vertical ? null : padding.left + position,
+      right: vertical ? padding.right : null,
+      bottom: vertical ? null : padding.bottom,
+      width: vertical ? hitThickness : length,
+      height: vertical ? length : hitThickness,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hoveredAxis = axis),
+        onExit: (_) {
+          setState(() => _hoveredAxis = null);
+          _startFadeOutTimer();
+        },
+        child: IgnorePointer(
+          ignoring: !visible,
+          child: AnimatedOpacity(
+            opacity: visible ? 1 : 0,
+            duration: const Duration(milliseconds: 300),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragStart:
+                  vertical
+                      ? (DragStartDetails details) => _startDrag(axis, details)
+                      : null,
+              onHorizontalDragStart:
+                  vertical
+                      ? null
+                      : (DragStartDetails details) => _startDrag(axis, details),
+              onVerticalDragUpdate:
+                  vertical
+                      ? (DragUpdateDetails details) =>
+                          _drag(axis, details, travel, contentExtent)
+                      : null,
+              onHorizontalDragUpdate:
+                  vertical
+                      ? null
+                      : (DragUpdateDetails details) =>
+                          _drag(axis, details, travel, contentExtent),
+              onVerticalDragEnd:
+                  vertical
+                      ? (DragEndDetails details) => _endDrag(axis, details)
+                      : null,
+              onHorizontalDragEnd:
+                  vertical
+                      ? null
+                      : (DragEndDetails details) => _endDrag(axis, details),
+              onVerticalDragCancel:
+                  vertical ? () => _endDrag(axis, DragEndDetails()) : null,
+              onHorizontalDragCancel:
+                  vertical ? null : () => _endDrag(axis, DragEndDetails()),
+              child: Align(
+                alignment:
+                    vertical ? Alignment.centerRight : Alignment.bottomCenter,
+                child: SizedBox.fromSize(
+                  size: size,
+                  child: IgnorePointer(
+                    child:
+                        widget.thumbBuilder?.call(
+                          context,
+                          details,
+                          defaultThumb,
+                        ) ??
+                        defaultThumb,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _startDrag(Axis axis, DragStartDetails details) {
+    setState(() => _draggingAxis = axis);
+    (axis == Axis.vertical
+            ? widget.onVerticalDragStart
+            : widget.onHorizontalDragStart)
+        ?.call(details);
+  }
+
+  void _drag(
+    Axis axis,
+    DragUpdateDetails details,
+    double travel,
+    double extent,
+  ) {
+    if (travel <= 0) {
+      return;
+    }
+    final Offset scene = widget.controller.toScene(Offset.zero);
+    final double oldOffset = axis == Axis.vertical ? scene.dy : scene.dx;
+    final double nextOffset = (oldOffset +
+            details.primaryDelta! * extent / travel)
+        .clamp(0.0, extent);
+    final double delta = nextOffset - oldOffset;
+    widget.controller.value =
+        widget.controller.value.clone()..translateByDouble(
+          axis == Axis.horizontal ? -delta : 0,
+          axis == Axis.vertical ? -delta : 0,
+          0,
+          1,
+        );
+    (axis == Axis.vertical
+            ? widget.onVerticalDragUpdate
+            : widget.onHorizontalDragUpdate)
+        ?.call(details);
+  }
+
+  void _endDrag(Axis axis, DragEndDetails details) {
+    setState(() => _draggingAxis = null);
+    _startFadeOutTimer();
+    (axis == Axis.vertical
+            ? widget.onVerticalDragEnd
+            : widget.onHorizontalDragEnd)
+        ?.call(details);
   }
 }

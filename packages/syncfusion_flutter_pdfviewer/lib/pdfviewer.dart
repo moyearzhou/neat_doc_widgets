@@ -44,3 +44,5 @@ export 'src/form_fields/pdf_text_box.dart' show PdfTextFormField;
 export 'src/pdfviewer.dart';
 
 export 'src/control/pdf_trackpad_gesture_region.dart';
+
+export 'src/control/pdf_scrollbar.dart';

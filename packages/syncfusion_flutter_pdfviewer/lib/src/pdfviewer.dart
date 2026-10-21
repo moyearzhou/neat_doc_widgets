@@ -30,6 +30,7 @@ import 'control/enums.dart';
 import 'control/pagination.dart';
 import 'control/pdf_page_view.dart';
 import 'control/pdf_scrollable.dart';
+import 'control/pdf_scrollbar.dart';
 import 'control/pdf_trackpad_gesture_region.dart';
 import 'control/pdf_trackpad_momentum.dart';
 import 'control/pdf_trackpad_session.dart';
@@ -152,6 +153,8 @@ class SfPdfViewer extends StatefulWidget {
     required PDFSource source,
     Key? key,
     this.canShowScrollHead = true,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -228,6 +231,8 @@ class SfPdfViewer extends StatefulWidget {
     Key? key,
     AssetBundle? bundle,
     this.canShowScrollHead = true,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -304,6 +309,8 @@ class SfPdfViewer extends StatefulWidget {
     Key? key,
     Map<String, String>? headers,
     this.canShowScrollHead = true,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -379,6 +386,8 @@ class SfPdfViewer extends StatefulWidget {
     Uint8List bytes, {
     Key? key,
     this.canShowScrollHead = true,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -457,6 +466,8 @@ class SfPdfViewer extends StatefulWidget {
     File file, {
     Key? key,
     this.canShowScrollHead = true,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -797,6 +808,13 @@ class SfPdfViewer extends StatefulWidget {
   /// _Note:_ On a desktop or mobile browser, this will have no effect since the scroll head
   /// will not be displayed.
   final bool canShowScrollHead;
+
+  /// Visual settings for the mobile page handle and desktop scrollbars.
+  /// Defaults preserve the built-in appearance.
+  final PdfScrollbarSettings scrollbarSettings;
+
+  /// Optional thumb visual builder. The viewer owns positioning and gestures.
+  final PdfScrollThumbBuilder? scrollThumbBuilder;
 
   /// Indicates whether the page scroll status in [SfPdfViewer] can be displayed or not.
   ///
@@ -3917,6 +3935,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                         _scrollDirection,
                         _getTileImage,
                         children,
+                        scrollbarSettings: widget.scrollbarSettings,
+                        scrollThumbBuilder: widget.scrollThumbBuilder,
                       ),
                     );
                     if (_isSinglePageViewPageChanged &&
@@ -4010,6 +4030,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                       _getTileImage,
                       key: _pdfScrollableStateKey,
                       onDoubleTap: _handleDoubleTap,
+                      scrollbarSettings: widget.scrollbarSettings,
+                      scrollThumbBuilder: widget.scrollThumbBuilder,
                     );
                     // Updates current offset when scrollDirection change occurs.
                     if (_isScrollDirectionChange) {

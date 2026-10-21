@@ -74,3 +74,8 @@ dependencies:
   syncfusion_flutter_pdf:
     path: ../syncfusion_flutter_pdf
   syncfusion_flutter_signaturepad: ^33.1.47
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter

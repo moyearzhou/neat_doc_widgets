@@ -12,13 +12,8 @@ import 'desktop_scrollbar.dart';
 import 'pdf_page_view.dart';
 import 'pdf_scrollable.dart';
 import 'scroll_head.dart';
+import 'scroll_head_metrics.dart';
 import 'scroll_status.dart';
-
-/// Height of the scroll head.
-const double _kPdfScrollHeadHeight = 48.0;
-
-/// Height of the scroll bar
-const double _kPdfScrollBarHeight = 54.0;
 
 /// Height of the pagination text field.
 const double _kPdfPaginationTextFieldWidth = 328.0;
@@ -57,6 +52,8 @@ class ScrollHeadOverlay extends StatefulWidget {
     this.onPdfOffsetChanged,
     this.initiateTileRendering,
     this.isPanEnabled = true,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
   }) : super(key: key);
 
   /// Indicates whether page navigation dialog must be shown or not.
@@ -64,6 +61,12 @@ class ScrollHeadOverlay extends StatefulWidget {
 
   /// Indicates whether scroll head must be shown or not.
   final bool canShowScrollHead;
+
+  /// Shared scrollbar appearance and geometry.
+  final PdfScrollbarSettings scrollbarSettings;
+
+  /// Custom thumb visual content; gestures remain owned by this view.
+  final PdfScrollThumbBuilder? scrollThumbBuilder;
 
   /// Indicates whether scroll status  must be shown or not.
   final bool canShowScrollStatus;
@@ -375,6 +378,7 @@ class ScrollHeadOverlayState extends State<ScrollHeadOverlay> {
       },
       onVerticalDragUpdate: _handleVerticalScrollHeadDragUpdate,
       onVerticalDragEnd: _handleScrollHeadDragEnd,
+      onVerticalDragCancel: () => _handleScrollHeadDragEnd(DragEndDetails()),
       onHorizontalDragStart:
           (widget.scrollDirection == PdfScrollDirection.horizontal)
               ? (DragStartDetails details) {
@@ -385,6 +389,7 @@ class ScrollHeadOverlayState extends State<ScrollHeadOverlay> {
           (widget.scrollDirection == PdfScrollDirection.horizontal)
               ? _handleScrollHeadDragUpdate
               : null,
+      onHorizontalDragCancel: () => _handleScrollHeadDragEnd(DragEndDetails()),
       onHorizontalDragEnd:
           (widget.scrollDirection == PdfScrollDirection.horizontal)
               ? _handleScrollHeadDragEnd
@@ -412,6 +417,9 @@ class ScrollHeadOverlayState extends State<ScrollHeadOverlay> {
           widget.scrollDirection,
           widget.isBookmarkViewOpen,
           PdfPageLayoutMode.continuous,
+          settings: widget.scrollbarSettings,
+          thumbBuilder: widget.scrollThumbBuilder,
+          isDragging: isScrollHeadDragged,
         ),
       ),
     );
@@ -433,6 +441,10 @@ class ScrollHeadOverlayState extends State<ScrollHeadOverlay> {
         }
       },
       child: DesktopScrollbar(
+        settings: widget.scrollbarSettings,
+        thumbBuilder: widget.scrollThumbBuilder,
+        pageNumber: widget.pdfViewerController.pageNumber,
+        pageCount: widget.pdfViewerController.pageCount,
         controller: widget.transformationController!,
         viewportSize: widget.viewportDimension,
         contentSize: widget.pdfDimension,
@@ -787,93 +799,80 @@ class ScrollHeadOverlayState extends State<ScrollHeadOverlay> {
     }
   }
 
+  double _headTravel(Axis axis) =>
+      ScrollHeadMetrics(
+        widget.viewportDimension,
+        axis,
+        widget.scrollbarSettings,
+        desktop: kIsDesktop,
+      ).travel;
+
   /// updates UI when scroll head drag is started.
   void _handleScrollHeadDragStart(
     DragStartDetails details,
     bool isVerticalDrag,
   ) {
     _isInteractionEnded = false;
-    if (widget.pdfViewerController.pageCount > 1) {
-      isScrollHeadDragged =
-          widget.scrollDirection == PdfScrollDirection.horizontal
-              ? !isVerticalDrag
-              : isVerticalDrag;
-    } else {
-      isScrollHeadDragged = false;
-    }
+    setState(() {
+      if (widget.pdfViewerController.pageCount > 1) {
+        isScrollHeadDragged =
+            widget.scrollDirection == PdfScrollDirection.horizontal
+                ? !isVerticalDrag
+                : isVerticalDrag;
+      } else {
+        isScrollHeadDragged = false;
+      }
+    });
   }
 
-  /// updates UI when scroll head drag is updating.
-  void _handleScrollHeadDragUpdate(DragUpdateDetails details) {
+  void _handleScrollHeadDragUpdate(DragUpdateDetails details) =>
+      _dragScrollHead(Axis.horizontal, details.delta.dx);
+
+  void _handleVerticalScrollHeadDragUpdate(DragUpdateDetails details) =>
+      _dragScrollHead(Axis.vertical, details.delta.dy);
+
+  void _dragScrollHead(Axis axis, double delta) {
+    final double travel = _headTravel(axis);
+    if (travel <= 0) {
+      return;
+    }
     _isInteractionEnded = false;
-    if (!widget.viewportDimension.isEmpty) {
-      final double dragOffset = details.delta.dx + _scrollHeadPositionX;
-      final double scrollHeadPosition =
-          widget.viewportDimension.width -
-          (kIsDesktop ? _kPdfScrollBarHeight : _kPdfScrollHeadHeight);
-      if (dragOffset < scrollHeadPosition && dragOffset >= 0) {
-        widget.onPdfOffsetChanged!(
-          Offset(
-            (widget.pdfDimension.width -
-                    (widget.viewportDimension.width / _scale)) *
-                (dragOffset / scrollHeadPosition),
-            widget.currentOffset.dy,
-          ),
-        );
-        _scrollHeadPositionX = dragOffset;
-      } else {
-        if (dragOffset < 0) {
-          widget.onPdfOffsetChanged!(Offset(0, widget.currentOffset.dy));
-        } else {
-          widget.onPdfOffsetChanged!(
-            Offset(
-              widget.pdfDimension.width -
-                  (widget.viewportDimension.width / _scale),
-              widget.currentOffset.dy,
-            ),
-          );
-        }
-      }
+    final bool vertical = axis == Axis.vertical;
+    final double oldPosition =
+        vertical ? _scrollHeadPositionY : _scrollHeadPositionX;
+    final double position = (oldPosition + delta).clamp(0.0, travel);
+    final double scale =
+        widget.transformationController!.value.getMaxScaleOnAxis();
+    final double extent =
+        vertical
+            ? widget.pdfDimension.height -
+                widget.viewportDimension.height / scale
+            : widget.pdfDimension.width -
+                widget.viewportDimension.width / scale;
+    if (extent <= 0) {
+      return;
     }
+    setState(() {
+      if (vertical) {
+        _scrollHeadPositionY = position;
+      } else {
+        _scrollHeadPositionX = position;
+      }
+    });
+    final Offset current = widget.transformationController!.toScene(
+      Offset.zero,
+    );
+    widget.onPdfOffsetChanged!(
+      vertical
+          ? Offset(current.dx, extent * position / travel)
+          : Offset(extent * position / travel, current.dy),
+    );
   }
 
-  /// updates UI when scroll head drag is updating.
-  void _handleVerticalScrollHeadDragUpdate(DragUpdateDetails details) {
-    if (!widget.viewportDimension.isEmpty) {
-      final double dragOffset = details.delta.dy + _scrollHeadPositionY;
-      final double scrollHeadPosition =
-          widget.viewportDimension.height -
-          (kIsDesktop ? _kPdfScrollBarHeight : _kPdfScrollHeadHeight);
-      if (dragOffset < scrollHeadPosition && dragOffset >= 0) {
-        widget.onPdfOffsetChanged!(
-          Offset(
-            widget.currentOffset.dx,
-            (widget.pdfDimension.height -
-                    (widget.viewportDimension.height / _scale)) *
-                (dragOffset / scrollHeadPosition),
-          ),
-        );
-        _scrollHeadPositionY = dragOffset;
-      } else {
-        if (dragOffset < 0) {
-          widget.onPdfOffsetChanged!(Offset(widget.currentOffset.dx, 0));
-        } else {
-          widget.onPdfOffsetChanged!(
-            Offset(
-              widget.currentOffset.dx,
-              widget.pdfDimension.height -
-                  (widget.viewportDimension.height / _scale),
-            ),
-          );
-        }
-      }
-    }
-  }
-
-  /// updates UI when scroll head is dragged.
+  /// Ends the interaction before requesting final high resolution tiles.
   void _handleScrollHeadDragEnd(DragEndDetails details) {
     _isInteractionEnded = true;
-    isScrollHeadDragged = false;
+    setState(() => isScrollHeadDragged = false);
     widget.initiateTileRendering?.call();
   }
 
@@ -933,28 +932,20 @@ class ScrollHeadOverlayState extends State<ScrollHeadOverlay> {
           widget.transformationController!.toScene(Offset.zero).dx;
       final double currentOffsetY =
           widget.transformationController!.toScene(Offset.zero).dy;
-      final double scrollPercentX =
-          currentOffsetX.abs() /
-          (widget.pdfDimension.width -
-              (widget.viewportDimension.width / _scale));
-      final double scrollPercentY =
-          currentOffsetY.abs() /
-          (widget.pdfDimension.height -
-              (widget.viewportDimension.height / _scale));
-      final double scrollHeadMaxExtentX =
-          widget.viewportDimension.width -
-          (kIsDesktop ? _kPdfScrollBarHeight : _kPdfScrollHeadHeight);
-      final double scrollHeadMaxExtentY =
-          widget.viewportDimension.height -
-          (kIsDesktop ? _kPdfScrollBarHeight : _kPdfScrollHeadHeight);
-      final double newPositionX = (scrollPercentX * scrollHeadMaxExtentX).clamp(
-        1,
-        scrollHeadMaxExtentX,
-      );
-      final double newPositionY = (scrollPercentY * scrollHeadMaxExtentY).clamp(
-        1,
-        scrollHeadMaxExtentY,
-      );
+      final double maxX =
+          widget.pdfDimension.width - widget.viewportDimension.width / _scale;
+      final double maxY =
+          widget.pdfDimension.height - widget.viewportDimension.height / _scale;
+      final double newPositionX =
+          maxX > 0
+              ? (currentOffsetX / maxX).clamp(0.0, 1.0) *
+                  _headTravel(Axis.horizontal)
+              : 0;
+      final double newPositionY =
+          maxY > 0
+              ? (currentOffsetY / maxY).clamp(0.0, 1.0) *
+                  _headTravel(Axis.vertical)
+              : 0;
       if (newPositionX.round() != _scrollHeadPositionX.round() &&
           _isInteractionEnded) {
         _scrollHeadPositionX = newPositionX;

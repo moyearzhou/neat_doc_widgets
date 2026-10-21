@@ -1,20 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_core/theme.dart';
+
 import '../../pdfviewer.dart';
 import '../common/pdfviewer_helper.dart';
 import '../theme/theme.dart';
+import 'scroll_head_metrics.dart';
 
-/// Size of the ScrollHead.
-const double kPdfScrollHeadSize = 36.0;
-
-/// A material design scroll head.
-///
-/// Scroll head is similar to [Scrollbar] but it has current page number
-/// as its child. This widget can be dragged up and down. The position of this
-/// widget changes based on current page number of [PdfViewerController]/
-@immutable
+/// Page navigation handle. The parent owns its drag and tap gestures.
 class ScrollHead extends StatefulWidget {
-  /// Constructor for ScrollHead.
   const ScrollHead(
     this.canShowHorizontalScrollBar,
     this.canShowVerticalScrollBar,
@@ -25,109 +18,144 @@ class ScrollHead extends StatefulWidget {
     this.isBookmarkViewOpen,
     this.pageLayoutMode, {
     super.key,
+    this.settings = const PdfScrollbarSettings(),
+    this.thumbBuilder,
+    this.isDragging = false,
   });
 
-  /// Position of the [ScrollHead] in [SfPdfViewer].
-  final Offset scrollHeadOffset;
-
-  /// PdfViewer controller of PdfViewer
-  final PdfViewerController pdfViewerController;
-
-  /// If true,MobileWebView is enabled.Default value is false.
-  final bool isMobileWebView;
-
-  /// Represents the scroll direction of PdfViewer.
-  final PdfScrollDirection scrollDirection;
-
-  /// If true,Horizontal scrollbar of the desktop.
   final bool canShowHorizontalScrollBar;
-
-  /// If true,vertical scrollbar of the desktop.
   final bool canShowVerticalScrollBar;
-
-  /// Indicates whether the built-in bookmark view in the [SfPdfViewer] is
-  /// opened or not.
+  final Offset scrollHeadOffset;
+  final PdfViewerController pdfViewerController;
+  final bool isMobileWebView;
+  final PdfScrollDirection scrollDirection;
   final bool isBookmarkViewOpen;
-
-  /// Represents page layout mode of the PdfViewer.
   final PdfPageLayoutMode pageLayoutMode;
+  final PdfScrollbarSettings settings;
+  final PdfScrollThumbBuilder? thumbBuilder;
+  final bool isDragging;
 
   @override
   State<ScrollHead> createState() => _ScrollHeadState();
 }
 
-/// State for [ScrollHead]
 class _ScrollHeadState extends State<ScrollHead> {
-  SfPdfViewerThemeData? _pdfViewerThemeData;
-  SfPdfViewerThemeData? _effectiveThemeData;
-  bool _isMaterial3 = false;
+  bool _isHovered = false;
 
   @override
-  void didChangeDependencies() {
-    _isMaterial3 = Theme.of(context).useMaterial3;
-    _pdfViewerThemeData = SfPdfViewerTheme.of(context);
-    _effectiveThemeData =
-        _isMaterial3
-            ? SfPdfViewerThemeDataM3(context)
-            : SfPdfViewerThemeDataM2(context);
-    super.didChangeDependencies();
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (kIsDesktop &&
+            widget.scrollDirection == PdfScrollDirection.horizontal &&
+            widget.pageLayoutMode != PdfPageLayoutMode.single) {
+          return Stack(
+            children: <Widget>[
+              if (widget.canShowVerticalScrollBar)
+                _buildHandle(context, constraints.biggest, Axis.vertical),
+              if (widget.canShowHorizontalScrollBar)
+                _buildHandle(context, constraints.biggest, Axis.horizontal),
+            ],
+          );
+        }
+        return _buildHandle(
+          context,
+          constraints.biggest,
+          widget.scrollDirection == PdfScrollDirection.horizontal
+              ? Axis.horizontal
+              : Axis.vertical,
+        );
+      },
+    );
   }
 
-  @override
-  void dispose() {
-    _pdfViewerThemeData = null;
-    _effectiveThemeData = null;
-    super.dispose();
-  }
-
-  Widget _createScrollBar(
-    bool visible,
-    Alignment alignment,
-    EdgeInsets edgeInsets,
-    Size size,
-  ) {
-    return Visibility(
-      visible: visible,
-      child: Container(
+  Widget _buildHandle(BuildContext context, Size viewport, Axis axis) {
+    final ScrollHeadMetrics metrics = ScrollHeadMetrics(
+      viewport,
+      axis,
+      widget.settings,
+      desktop: kIsDesktop,
+    );
+    final Alignment alignment =
+        axis == Axis.horizontal ? Alignment.bottomLeft : Alignment.topRight;
+    final double offset = (axis == Axis.horizontal
+            ? widget.scrollHeadOffset.dx
+            : widget.scrollHeadOffset.dy)
+        .clamp(0.0, metrics.travel);
+    final Widget defaultThumb =
+        kIsDesktop
+            ? DecoratedBox(
+              decoration: BoxDecoration(
+                color: widget.settings.thumbColor ?? Colors.grey,
+                borderRadius: BorderRadius.all(
+                  widget.settings.radius ?? const Radius.circular(7),
+                ),
+              ),
+            )
+            : _buildMobileThumb(context, axis);
+    final PdfScrollThumbDetails details = PdfScrollThumbDetails(
+      axis: axis,
+      size: metrics.thumbSize,
+      pageNumber: widget.pdfViewerController.pageNumber,
+      pageCount: widget.pdfViewerController.pageCount,
+      isScrollHead: true,
+      isDragging: widget.isDragging,
+      isHovered: _isHovered,
+    );
+    return Padding(
+      padding: widget.settings.scrollHeadMargin,
+      child: Align(
         alignment: alignment,
-        margin: edgeInsets,
-        child: Material(
-          color: Colors.grey,
-          borderRadius: const BorderRadius.all(Radius.circular(7.0)),
-          child: Container(constraints: BoxConstraints.tight(size)),
+        child: Container(
+          margin:
+              axis == Axis.horizontal
+                  ? EdgeInsets.only(left: offset)
+                  : EdgeInsets.only(top: offset),
+          width: metrics.hitSize.width,
+          height: metrics.hitSize.height,
+          child: MouseRegion(
+            onEnter: (_) => setState(() => _isHovered = true),
+            onExit: (_) => setState(() => _isHovered = false),
+            child: Semantics(
+              container: true,
+              excludeSemantics: true,
+              button: true,
+              label:
+                  widget.isBookmarkViewOpen
+                      ? ''
+                      : widget.pdfViewerController.pageNumber.toString(),
+              child: Align(
+                alignment:
+                    axis == Axis.horizontal
+                        ? Alignment.bottomCenter
+                        : Alignment.centerRight,
+                child: SizedBox.fromSize(
+                  size: metrics.thumbSize,
+                  child: IgnorePointer(
+                    child:
+                        widget.thumbBuilder?.call(
+                          context,
+                          details,
+                          defaultThumb,
+                        ) ??
+                        defaultThumb,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (kIsDesktop) {
-      final Widget verticalScrollBar = _createScrollBar(
-        widget.canShowVerticalScrollBar,
-        Alignment.topRight,
-        EdgeInsets.only(top: widget.scrollHeadOffset.dy),
-        const Size(10.0, 54.0),
-      );
-      final Widget horizontalScrollBar = _createScrollBar(
-        widget.canShowHorizontalScrollBar,
-        Alignment.bottomLeft,
-        EdgeInsets.only(left: widget.scrollHeadOffset.dx),
-        const Size(54.0, 10.0),
-      );
-
-      if (widget.scrollDirection == PdfScrollDirection.horizontal &&
-          widget.pageLayoutMode != PdfPageLayoutMode.single) {
-        return Stack(
-          children: <Widget>[verticalScrollBar, horizontalScrollBar],
-        );
-      } else if (widget.scrollDirection == PdfScrollDirection.horizontal &&
-          widget.pageLayoutMode == PdfPageLayoutMode.single) {
-        return horizontalScrollBar;
-      } else {
-        return verticalScrollBar;
-      }
-    }
+  Widget _buildMobileThumb(BuildContext context, Axis axis) {
+    final SfPdfViewerThemeData? theme = SfPdfViewerTheme.of(context);
+    final bool material3 = Theme.of(context).useMaterial3;
+    final SfPdfViewerThemeData effectiveTheme =
+        material3
+            ? SfPdfViewerThemeDataM3(context)
+            : SfPdfViewerThemeDataM2(context);
     const List<BoxShadow> boxShadows = <BoxShadow>[
       BoxShadow(color: Color.fromRGBO(0, 0, 0, 0.14), blurRadius: 2),
       BoxShadow(
@@ -141,78 +169,33 @@ class _ScrollHeadState extends State<ScrollHead> {
         offset: Offset(0, 1),
       ),
     ];
-    final EdgeInsets edgeInsets =
-        widget.scrollDirection == PdfScrollDirection.horizontal
-            ? EdgeInsets.only(left: widget.scrollHeadOffset.dx)
-            : EdgeInsets.only(top: widget.scrollHeadOffset.dy);
-    final BorderRadius borderRadius =
-        widget.scrollDirection == PdfScrollDirection.horizontal
-            ? const BorderRadius.only(
-              topRight: Radius.circular(kPdfScrollHeadSize),
-              topLeft: Radius.circular(kPdfScrollHeadSize),
-            )
-            : const BorderRadius.only(
-              topLeft: Radius.circular(kPdfScrollHeadSize),
-              bottomLeft: Radius.circular(kPdfScrollHeadSize),
-            );
-    final Alignment alignment =
-        widget.scrollDirection == PdfScrollDirection.horizontal
-            ? Alignment.bottomLeft
-            : Alignment.topRight;
-    return Align(
-      alignment: alignment,
-      child: Container(
-        alignment: alignment,
-        margin: edgeInsets,
-        constraints: const BoxConstraints.tightFor(width: 48.0, height: 48.0),
-        child: Semantics(
-          container: true,
-          button: true,
-          child: Align(
-            alignment:
-                widget.scrollDirection == PdfScrollDirection.horizontal
-                    ? Alignment.bottomCenter
-                    : Alignment.centerRight,
-            child: Container(
-              decoration: BoxDecoration(
-                color:
-                    _pdfViewerThemeData!.scrollHeadStyle?.backgroundColor ??
-                    _effectiveThemeData!.scrollHeadStyle?.backgroundColor ??
-                    (Theme.of(context).colorScheme.brightness ==
-                            Brightness.light
-                        ? const Color(0xFFFAFAFA)
-                        : const Color(0xFF424242)),
-                borderRadius: borderRadius,
-                boxShadow: boxShadows,
-              ),
-              constraints: const BoxConstraints.tightFor(
-                width: kPdfScrollHeadSize,
-                height: kPdfScrollHeadSize,
-              ),
-              child: Align(
-                child: Text(
-                  '${widget.pdfViewerController.pageNumber}',
-                  style: Theme.of(context).textTheme.bodySmall!
-                      .copyWith(
-                        fontSize: _isMaterial3 ? 14 : 12,
-                        color:
-                            Theme.of(context).brightness == Brightness.light
-                                ? Colors.black.withValues(alpha: 0.87)
-                                : Colors.white.withValues(alpha: 0.87),
-                      )
-                      .merge(
-                        _pdfViewerThemeData!
-                            .scrollHeadStyle
-                            ?.pageNumberTextStyle,
-                      ),
-                  semanticsLabel:
-                      widget.isBookmarkViewOpen
-                          ? ''
-                          : widget.pdfViewerController.pageNumber.toString(),
-                ),
-              ),
-            ),
+
+    return DecoratedBox(
+      decoration:
+          widget.settings.scrollHeadDecoration ??
+          BoxDecoration(
+            color:
+                theme?.scrollHeadStyle?.backgroundColor ??
+                effectiveTheme.scrollHeadStyle?.backgroundColor,
+            borderRadius:
+                axis == Axis.horizontal
+                    ? const BorderRadius.vertical(top: Radius.circular(36))
+                    : const BorderRadius.horizontal(left: Radius.circular(36)),
+            boxShadow: boxShadows,
           ),
+      child: Center(
+        child: Text(
+          '${widget.pdfViewerController.pageNumber}',
+          style: Theme.of(context).textTheme.bodySmall!
+              .copyWith(
+                fontSize: material3 ? 14 : 12,
+                color:
+                    Theme.of(context).brightness == Brightness.light
+                        ? Colors.black.withValues(alpha: 0.87)
+                        : Colors.white.withValues(alpha: 0.87),
+              )
+              .merge(theme?.scrollHeadStyle?.pageNumberTextStyle),
+          semanticsLabel: widget.isBookmarkViewOpen ? '' : null,
         ),
       ),
     );

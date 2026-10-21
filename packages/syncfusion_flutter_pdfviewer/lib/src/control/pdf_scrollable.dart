@@ -45,6 +45,8 @@ class PdfScrollable extends StatefulWidget {
     this.initiateTileRendering, {
     Key? key,
     this.onDoubleTap,
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
   }) : super(key: key);
 
   /// Transformation controller of PdfViewer.
@@ -55,6 +57,12 @@ class PdfScrollable extends StatefulWidget {
 
   /// Indicates whether scroll head must be shown or not.
   final bool canShowScrollHead;
+
+  /// Scrollbar appearance shared with the overlay.
+  final PdfScrollbarSettings scrollbarSettings;
+
+  /// Custom visual content for scroll thumbs.
+  final PdfScrollThumbBuilder? scrollThumbBuilder;
 
   /// PdfViewer controller of PdfViewer.
   final PdfViewerController pdfViewerController;
@@ -229,6 +237,8 @@ class PdfScrollableState extends State<PdfScrollable> {
       widget.isBookmarkViewOpen,
       widget.textDirection,
       widget.child,
+      scrollbarSettings: widget.scrollbarSettings,
+      scrollThumbBuilder: widget.scrollThumbBuilder,
       isPanEnabled: widget.isPanEnabled,
       onInteractionStart: _handleInteractionStart,
       onInteractionUpdate: _handleInteractionUpdate,

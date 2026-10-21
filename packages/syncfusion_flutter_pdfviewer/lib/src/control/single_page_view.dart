@@ -15,13 +15,11 @@ import 'desktop_scrollbar.dart';
 import 'pdf_page_view.dart';
 import 'pdf_scrollable.dart';
 import 'scroll_head.dart';
+import 'scroll_head_metrics.dart';
 import 'scroll_status.dart';
 
 /// Signature for [SfPdfViewer.onPageChanged] callback.
 typedef PageChangedCallback = void Function(int newPage);
-
-/// Size of the scroll head.
-const double _kPdfScrollHeadSize = 48.0;
 
 /// Height of the pagination text field.
 const double _kPdfPaginationTextFieldWidth = 328.0;
@@ -62,8 +60,10 @@ class SinglePageView extends StatefulWidget {
     this.isTablet,
     this.scrollDirection,
     this.onInteractionEnd,
-    this.children,
-  ) : super(key: key);
+    this.children, {
+    this.scrollbarSettings = const PdfScrollbarSettings(),
+    this.scrollThumbBuilder,
+  }) : super(key: key);
 
   /// PdfViewer controller of PdfViewer.
   final PdfViewerController pdfViewerController;
@@ -103,6 +103,12 @@ class SinglePageView extends StatefulWidget {
 
   /// Indicates whether scroll head must be shown or not.
   final bool canShowScrollHead;
+
+  /// Shared scrollbar appearance and geometry.
+  final PdfScrollbarSettings scrollbarSettings;
+
+  /// Custom thumb visual content; gestures remain owned by this view.
+  final PdfScrollThumbBuilder? scrollThumbBuilder;
 
   /// Indicates whether scroll status  must be shown or not.
   final bool canShowScrollStatus;
@@ -582,16 +588,13 @@ class SinglePageViewState extends State<SinglePageView> {
         );
       }
     }
+    // Page 1 maps to the start and the last page maps to the track end.
     _scrollHeadPosition =
-        widget.pdfViewerController.pageNumber == 1
+        widget.pdfViewerController.pageCount <= 1
             ? 0
-            : widget.scrollDirection == PdfScrollDirection.horizontal
-            ? (widget.pdfViewerController.pageNumber /
-                    widget.pdfViewerController.pageCount) *
-                (widget.viewportDimension.width - _kPdfScrollHeadSize)
-            : (widget.pdfViewerController.pageNumber /
-                    widget.pdfViewerController.pageCount) *
-                (widget.viewportDimension.height - _kPdfScrollHeadSize);
+            : (widget.pdfViewerController.pageNumber - 1) /
+                (widget.pdfViewerController.pageCount - 1) *
+                _headTravel;
 
     if (widget.scrollDirection == PdfScrollDirection.horizontal) {
       _canShowHorizontalScrollBar = true;
@@ -743,9 +746,38 @@ class SinglePageViewState extends State<SinglePageView> {
           },
         ),
         GestureDetector(
-          onHorizontalDragStart: _handleDragStart,
-          onHorizontalDragEnd: _handleDragEnd,
-          onHorizontalDragUpdate: _handleDragUpdate,
+          onHorizontalDragStart:
+              widget.scrollDirection == PdfScrollDirection.horizontal
+                  ? _handleDragStart
+                  : null,
+          onHorizontalDragEnd:
+              widget.scrollDirection == PdfScrollDirection.horizontal
+                  ? _handleDragEnd
+                  : null,
+          onHorizontalDragUpdate:
+              widget.scrollDirection == PdfScrollDirection.horizontal
+                  ? _handleDragUpdate
+                  : null,
+          onHorizontalDragCancel:
+              widget.scrollDirection == PdfScrollDirection.horizontal
+                  ? () => _handleDragEnd(DragEndDetails())
+                  : null,
+          onVerticalDragStart:
+              widget.scrollDirection == PdfScrollDirection.vertical
+                  ? _handleDragStart
+                  : null,
+          onVerticalDragEnd:
+              widget.scrollDirection == PdfScrollDirection.vertical
+                  ? _handleDragEnd
+                  : null,
+          onVerticalDragUpdate:
+              widget.scrollDirection == PdfScrollDirection.vertical
+                  ? _handleDragUpdate
+                  : null,
+          onVerticalDragCancel:
+              widget.scrollDirection == PdfScrollDirection.vertical
+                  ? () => _handleDragEnd(DragEndDetails())
+                  : null,
           onTap: () {
             if (!kIsDesktop || (kIsDesktop && widget.isMobileWebView)) {
               _textFieldController.clear();
@@ -771,11 +803,18 @@ class SinglePageViewState extends State<SinglePageView> {
               widget.scrollDirection,
               widget.isBookmarkViewOpen,
               PdfPageLayoutMode.single,
+              settings: widget.scrollbarSettings,
+              thumbBuilder: widget.scrollThumbBuilder,
+              isDragging: isScrollHeadDragged,
             ),
           ),
         ),
         if (kIsDesktop && !widget.isMobileWebView)
           DesktopScrollbar(
+            settings: widget.scrollbarSettings,
+            thumbBuilder: widget.scrollThumbBuilder,
+            pageNumber: widget.pdfViewerController.pageNumber,
+            pageCount: widget.pdfViewerController.pageCount,
             contentSize:
                 widget
                     .pdfPages[widget.pdfViewerController.pageNumber]
@@ -792,15 +831,23 @@ class SinglePageViewState extends State<SinglePageView> {
             verticalScrollbarPadding:
                 widget.scrollDirection == PdfScrollDirection.vertical &&
                         widget.pdfViewerController.pageCount > 1
-                    ? const EdgeInsets.only(
-                      right: _defaultDesktopScrollbarWidth + _scrollbarPadding,
+                    ? EdgeInsets.only(
+                      right:
+                          (widget.scrollbarSettings.thickness ??
+                              _defaultDesktopScrollbarWidth) +
+                          widget.scrollbarSettings.scrollHeadMargin.right +
+                          _scrollbarPadding,
                     )
                     : const EdgeInsets.only(right: _scrollbarPadding),
             horizontalScrollbarPadding:
                 widget.scrollDirection == PdfScrollDirection.horizontal &&
                         widget.pdfViewerController.pageCount > 1
-                    ? const EdgeInsets.only(
-                      bottom: _defaultDesktopScrollbarWidth + _scrollbarPadding,
+                    ? EdgeInsets.only(
+                      bottom:
+                          (widget.scrollbarSettings.thickness ??
+                              _defaultDesktopScrollbarWidth) +
+                          widget.scrollbarSettings.scrollHeadMargin.bottom +
+                          _scrollbarPadding,
                     )
                     : const EdgeInsets.only(bottom: _scrollbarPadding),
           ),
@@ -932,36 +979,44 @@ class SinglePageViewState extends State<SinglePageView> {
     );
   }
 
+  Axis get _headAxis =>
+      widget.scrollDirection == PdfScrollDirection.horizontal
+          ? Axis.horizontal
+          : Axis.vertical;
+
+  double get _headTravel =>
+      ScrollHeadMetrics(
+        widget.viewportDimension,
+        _headAxis,
+        widget.scrollbarSettings,
+        desktop: kIsDesktop,
+      ).travel;
+
+  double _dragHeadPosition = 0;
+
   void _handleDragStart(DragStartDetails details) {
-    isScrollHeadDragged = true;
+    _dragHeadPosition = _scrollHeadPosition;
+    setState(() => isScrollHeadDragged = true);
   }
 
   void _handleDragUpdate(DragUpdateDetails details) {
-    final RenderObject? renderObject = context.findRenderObject();
-    if (renderObject is! RenderBox) {
+    final double travel = _headTravel;
+    if (travel <= 0 || widget.pdfViewerController.pageCount <= 1) {
       return;
     }
-    final Offset localPosition = renderObject.globalToLocal(
-      details.globalPosition,
+    // Use deltas from the grabbed position so the handle does not jump when
+    // grabbed away from its leading edge, including nonzero track margins.
+    _dragHeadPosition = (_dragHeadPosition + details.primaryDelta!).clamp(
+      0.0,
+      travel,
     );
-
-    int pageNumber = 0;
-    if (widget.scrollDirection == PdfScrollDirection.horizontal) {
-      _scrollHeadPosition = localPosition.dx;
-      pageNumber =
-          (_scrollHeadPosition /
-                  (widget.viewportDimension.width - _kPdfScrollHeadSize) *
-                  widget.pdfViewerController.pageCount)
-              .round();
-    } else {
-      _scrollHeadPosition = localPosition.dy;
-      pageNumber =
-          (_scrollHeadPosition /
-                  (widget.viewportDimension.height - _kPdfScrollHeadSize) *
-                  widget.pdfViewerController.pageCount)
-              .round();
-    }
-    if (pageNumber > 0 && pageNumber != widget.pdfViewerController.pageNumber) {
+    final int pageNumber =
+        1 +
+        (_dragHeadPosition /
+                travel *
+                (widget.pdfViewerController.pageCount - 1))
+            .round();
+    if (pageNumber != widget.pdfViewerController.pageNumber) {
       widget.pdfViewerController.jumpToPage(pageNumber);
       setState(() {});
     }
