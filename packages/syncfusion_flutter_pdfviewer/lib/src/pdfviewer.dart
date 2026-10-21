@@ -157,6 +157,7 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollHead = true,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
+    this.pageRenderColorFilter,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -235,6 +236,7 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollHead = true,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
+    this.pageRenderColorFilter,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -313,6 +315,7 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollHead = true,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
+    this.pageRenderColorFilter,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -390,6 +393,7 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollHead = true,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
+    this.pageRenderColorFilter,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -470,6 +474,7 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollHead = true,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
+    this.pageRenderColorFilter,
     this.pageSpacing = 4,
     this.controller,
     this.undoController,
@@ -817,6 +822,13 @@ class SfPdfViewer extends StatefulWidget {
 
   /// Optional thumb visual builder. The viewer owns positioning and gestures.
   final PdfScrollThumbBuilder? scrollThumbBuilder;
+
+  /// Optional color transformation for PDF page rasters and their paper.
+  ///
+  /// Applies to base images, zoom tiles and unloaded page paper. Page spacing,
+  /// scrollbars, loading indicators, form fields and annotation overlays retain
+  /// their own colors. Null preserves the original document appearance.
+  final ColorFilter? pageRenderColorFilter;
 
   /// Indicates whether the page scroll status in [SfPdfViewer] can be displayed or not.
   ///
@@ -3885,6 +3897,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                     _selectedAnnotation,
                     _onAnnotationSelectionChanged,
                     _onStickyNoteAnnotationDoubleTapped,
+                    pageRenderColorFilter: widget.pageRenderColorFilter,
                   );
                   final double pageSpacing =
                       index == _pdfViewerController._pageCount - 1
