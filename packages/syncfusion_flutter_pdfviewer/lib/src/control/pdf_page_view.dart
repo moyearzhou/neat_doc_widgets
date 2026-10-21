@@ -18,6 +18,7 @@ import '../common/mobile_helper.dart'
 import '../common/pdfviewer_helper.dart';
 import '../form_fields/form_field_container.dart';
 import '../theme/theme.dart';
+import 'pdf_page_render_surface.dart';
 import 'pdf_scrollable.dart';
 import 'pdfviewer_canvas.dart';
 import 'single_page_view.dart';
@@ -73,8 +74,12 @@ class PdfPageView extends StatefulWidget {
     this.annotations,
     this.selectedAnnotation,
     this.onAnnotationSelectionChanged,
-    this.onStickyNoteDoubleTapped,
-  ) : super(key: key);
+    this.onStickyNoteDoubleTapped, {
+    this.pageRenderColorFilter,
+  }) : super(key: key);
+
+  /// Reading transformation shared by the base raster, zoom tiles and paper.
+  final ColorFilter? pageRenderColorFilter;
 
   /// Document ID of current pdf
   final String documentID;
@@ -345,38 +350,7 @@ class PdfPageViewState extends State<PdfPageView> {
             widget.scrollDirection == PdfScrollDirection.vertical
                 ? Column(
                   children: <Widget>[
-                    Stack(
-                      children: <Widget>[
-                        SizedBox(
-                          width: widget.width,
-                          height: widget.height,
-                          child: Semantics(
-                            label: widget.semanticLabel,
-                            child: _pdfPage,
-                          ),
-                        ),
-                        if (_tileImageCache != null && _tileImage != null)
-                          Positioned(
-                            top:
-                                _tileImageCache!.visibleRect.top /
-                                _heightPercentage,
-                            left:
-                                _tileImageCache!.visibleRect.left /
-                                _heightPercentage,
-                            width:
-                                _tileImageCache!.visibleRect.width /
-                                _heightPercentage,
-                            height:
-                                _tileImageCache!.visibleRect.height /
-                                _heightPercentage,
-                            child: SizedBox(
-                              width: _tileImageCache!.imageSize.width,
-                              height: _tileImageCache!.imageSize.height,
-                              child: _tileImage,
-                            ),
-                          ),
-                      ],
-                    ),
+                    _buildPageRaster(),
                     Container(
                       height: widget.isSinglePageView ? 0.0 : pageSpacing,
                       color:
@@ -391,38 +365,7 @@ class PdfPageViewState extends State<PdfPageView> {
                 )
                 : Row(
                   children: <Widget>[
-                    Stack(
-                      children: <Widget>[
-                        SizedBox(
-                          width: widget.width,
-                          height: widget.height,
-                          child: Semantics(
-                            label: widget.semanticLabel,
-                            child: _pdfPage,
-                          ),
-                        ),
-                        if (_tileImageCache != null && _tileImage != null)
-                          Positioned(
-                            top:
-                                _tileImageCache!.visibleRect.top /
-                                _heightPercentage,
-                            left:
-                                _tileImageCache!.visibleRect.left /
-                                _heightPercentage,
-                            width:
-                                _tileImageCache!.visibleRect.width /
-                                _heightPercentage,
-                            height:
-                                _tileImageCache!.visibleRect.height /
-                                _heightPercentage,
-                            child: SizedBox(
-                              width: _tileImageCache!.imageSize.width,
-                              height: _tileImageCache!.imageSize.height,
-                              child: _tileImage,
-                            ),
-                          ),
-                      ],
-                    ),
+                    _buildPageRaster(),
                     Container(
                       width: widget.isSinglePageView ? 0.0 : pageSpacing,
                       color:
@@ -863,7 +806,6 @@ class PdfPageViewState extends State<PdfPageView> {
     final Widget child = Container(
       height: widget.height + heightSpacing,
       width: widget.width + widthSpacing,
-      color: Colors.white,
       foregroundDecoration: BoxDecoration(
         border:
             widget.isSinglePageView
@@ -874,32 +816,73 @@ class PdfPageViewState extends State<PdfPageView> {
                     : Border(right: borderSide)
                 : Border(bottom: borderSide),
       ),
-      child: Center(
-        child: Visibility(
-          visible: isVisible,
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(
-              _pdfViewerThemeData!.progressBarColor ??
-                  _effectiveThemeData!.progressBarColor ??
-                  (Theme.of(context).colorScheme.primary),
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: PdfPageRenderSurface(
+              colorFilter: widget.pageRenderColorFilter,
+              child: const SizedBox.expand(),
             ),
-            backgroundColor:
-                _pdfViewerThemeData!.progressBarColor != null
-                    ? _pdfViewerThemeData!.progressBarColor!.withValues(
-                      alpha: 0.2,
-                    )
-                    : _effectiveThemeData!.progressBarColor != null
-                    ? _effectiveThemeData!.progressBarColor!.withValues(
-                      alpha: 0.2,
-                    )
-                    : (Theme.of(
-                      context,
-                    ).colorScheme.primary.withValues(alpha: 0.2)),
           ),
-        ),
+          Center(
+            child: Visibility(
+              visible: isVisible,
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  _pdfViewerThemeData!.progressBarColor ??
+                      _effectiveThemeData!.progressBarColor ??
+                      (Theme.of(context).colorScheme.primary),
+                ),
+                backgroundColor:
+                    _pdfViewerThemeData!.progressBarColor != null
+                        ? _pdfViewerThemeData!.progressBarColor!.withValues(
+                          alpha: 0.2,
+                        )
+                        : _effectiveThemeData!.progressBarColor != null
+                        ? _effectiveThemeData!.progressBarColor!.withValues(
+                          alpha: 0.2,
+                        )
+                        : (Theme.of(
+                          context,
+                        ).colorScheme.primary.withValues(alpha: 0.2)),
+              ),
+            ),
+          ),
+        ],
       ),
     );
     return child;
+  }
+
+  Widget _buildPageRaster() {
+    return SizedBox(
+      width: widget.width,
+      height: widget.height,
+      child: PdfPageRenderSurface(
+        colorFilter: widget.pageRenderColorFilter,
+        child: Stack(
+          children: <Widget>[
+            SizedBox(
+              width: widget.width,
+              height: widget.height,
+              child: Semantics(label: widget.semanticLabel, child: _pdfPage),
+            ),
+            if (_tileImageCache != null && _tileImage != null)
+              Positioned(
+                top: _tileImageCache!.visibleRect.top / _heightPercentage,
+                left: _tileImageCache!.visibleRect.left / _heightPercentage,
+                width: _tileImageCache!.visibleRect.width / _heightPercentage,
+                height: _tileImageCache!.visibleRect.height / _heightPercentage,
+                child: SizedBox(
+                  width: _tileImageCache!.imageSize.width,
+                  height: _tileImageCache!.imageSize.height,
+                  child: _tileImage,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _calculateHeightPercentage() {
