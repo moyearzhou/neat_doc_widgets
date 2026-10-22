@@ -8,6 +8,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_core/localizations.dart';
 import 'package:syncfusion_flutter_core/theme.dart';
@@ -29,6 +30,7 @@ import 'common/pdfviewer_plugin.dart';
 import 'control/enums.dart';
 import 'control/pagination.dart';
 import 'control/pdf_page_view.dart';
+import 'control/pdf_raster_queue.dart';
 import 'control/pdf_scrollable.dart';
 import 'control/pdf_scrollbar.dart';
 import 'control/pdf_trackpad_gesture_region.dart';
@@ -48,9 +50,11 @@ import 'form_fields/pdf_radio_button.dart';
 import 'form_fields/pdf_signature.dart';
 import 'form_fields/pdf_text_box.dart';
 import 'text_extraction/text_extraction.dart';
+import 'text_extraction/visible_page_text_loader.dart';
 import 'theme/theme.dart';
 
 part 'control/pdf_viewer_trackpad.dart';
+part 'control/pdf_viewer_page_loading.dart';
 
 /// Signature for [SfPdfViewer.onTextSelectionChanged] callback.
 typedef PdfTextSelectionChangedCallback =
@@ -1286,9 +1290,13 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   Size _pdfDimension = Size.zero;
   bool _isPageChanged = false;
   bool _isSinglePageViewPageChanged = false;
-  static const int _pageImageCacheRadius = 4;
+  final PdfRasterQueue _rasterQueue = PdfRasterQueue();
+  final Set<int> _cachedImagePages = <int>{};
+  bool _pageRefreshScheduled = false;
+  int _pagePrefetchDirection = 1;
   final List<int> _renderedImages = <int>[];
-  final Map<int, String> _pageTextExtractor = <int, String>{};
+  VisiblePageTextLoader? _visiblePageText;
+  PageTextWorker? _pageTextWorker;
   Size _totalImageSize = Size.zero;
   late PdfScrollDirection _scrollDirection;
   late PdfScrollDirection _tempScrollDirection;
@@ -1436,6 +1444,9 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _previousPageNumber = 1;
     _maxPdfPageWidth = 0;
     WidgetsBinding.instance.addObserver(this);
+    SemanticsBinding.instance.addSemanticsEnabledListener(
+      _handleSemanticsChanged,
+    );
   }
 
   @override
@@ -1593,6 +1604,12 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    SemanticsBinding.instance.removeSemanticsEnabledListener(
+      _handleSemanticsChanged,
+    );
+    _disposePageText();
+    _tileTimer?.cancel();
+    _rasterQueue.dispose();
     _trackpadMomentum.dispose();
     bookmarkList.clear();
     helper.enableDefaultMenu();
@@ -1613,7 +1630,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _disposeCollection(_originalHeight);
     _disposeCollection(_originalWidth);
     _renderedImages.clear();
-    _pageTextExtractor.clear();
+    _cachedImagePages.clear();
     _pdfPages.clear();
     _pdfPagesKey.clear();
     _disposeFormFields();
@@ -1691,7 +1708,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _pdfViewerController._reset();
     _pdfPages.clear();
     _plugin.closeDocument();
-    _pageTextExtractor.clear();
+    _disposePageText();
+    _cachedImagePages.clear();
     _document?.dispose();
     _document = null;
     imageCache.clear();
@@ -3819,7 +3837,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                         _handlePdfPagePointerDown,
                         _handlePdfPagePointerMove,
                         _handlePdfPagePointerUp,
-                        isBookmarkViewOpen ? '' : _pageTextExtractor[index],
+                        isBookmarkViewOpen ? '' : _visiblePageText?.textFor(index),
                         widget.pageLayoutMode == PdfPageLayoutMode.single,
                         _textDirection!,
                         widget.canShowHyperlinkDialog,
@@ -3834,7 +3852,12 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                         _onAnnotationSelectionChanged,
                         _onStickyNoteAnnotationDoubleTapped,
                         pageRenderColorFilter: widget.pageRenderColorFilter,
+                        rasterQueue: _rasterQueue,
                       );
+                      // A page's spinner, raster or annotation update must not
+                      // repaint the other pages in the continuous Column/Row.
+                      // Retain each page's display list across viewport moves.
+                      page = RepaintBoundary(child: page);
                       final double pageSpacing =
                           index == _pdfViewerController._pageCount - 1
                           ? 0.0
@@ -4099,88 +4122,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                     : _getEmptyLinearProgressView()));
   }
 
-  void _checkVisiblePages() {
-    if (_pdfPages.isEmpty) {
-      return;
-    }
-    _renderedImages.clear();
-    final double zoomLevel = _transformationController.value[0];
-    if (widget.pageLayoutMode == PdfPageLayoutMode.single) {
-      if (!_pageTextExtractor.containsKey(
-        _pdfViewerController.pageNumber - 1,
-      )) {
-        _pageTextExtractor[_pdfViewerController.pageNumber -
-            1] = _pdfTextExtractor!.extractText(
-          startPageIndex: _pdfViewerController.pageNumber - 1,
-        );
-      }
-      _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.getPageImage(
-        _viewportSize,
-        zoomLevel,
-      );
-      _renderedImages.add(_pdfViewerController.pageNumber);
-    } else {
-      final Offset offset = _transformationController.toScene(Offset.zero);
-      final double x = offset.dx;
-      final double y = offset.dy;
-
-      final Rect viewportRect = Rect.fromLTWH(
-        x,
-        y,
-        _viewportSize.width / zoomLevel,
-        _viewportSize.height / zoomLevel,
-      );
-      final int cacheStart =
-          (_pdfViewerController.pageNumber - _pageImageCacheRadius).clamp(
-            1,
-            _pdfViewerController.pageCount,
-          );
-      final int cacheEnd =
-          (_pdfViewerController.pageNumber + _pageImageCacheRadius).clamp(
-            1,
-            _pdfViewerController.pageCount,
-          );
-
-      // Keep a bounded page-image window so normal and reverse scrolling can
-      // reuse rendered pages without retaining the entire document in memory.
-      for (
-        int pageNumber = 1;
-        pageNumber <= _pdfViewerController.pageCount;
-        pageNumber++
-      ) {
-        final PdfPageViewState? pageState =
-            _pdfPagesKey[pageNumber]?.currentState;
-        if (pageNumber < cacheStart || pageNumber > cacheEnd) {
-          pageState?.clearPageImage();
-          continue;
-        }
-
-        final Rect pageRect = Rect.fromLTWH(
-          _scrollDirection == PdfScrollDirection.vertical
-              ? 0
-              : _pdfPages[pageNumber]!.pageOffset,
-          _scrollDirection == PdfScrollDirection.vertical
-              ? _pdfPages[pageNumber]!.pageOffset
-              : 0,
-          _pdfPages[pageNumber]!.pageSize.width,
-          _pdfPages[pageNumber]!.pageSize.height,
-        );
-
-        if (viewportRect.overlaps(pageRect)) {
-          _renderedImages.add(pageNumber);
-          //Extract page text only if it's not already available.
-          if (!_pageTextExtractor.containsKey(pageNumber - 1)) {
-            _pageTextExtractor[pageNumber - 1] = _pdfTextExtractor!.extractText(
-              startPageIndex: pageNumber - 1,
-            );
-          }
-        }
-        if (_renderedImages.contains(pageNumber)) {
-          pageState?.getPageImage(_viewportSize, zoomLevel);
-        }
-      }
-    }
-  }
+  void _checkVisiblePages() => _refreshVisiblePages();
 
   bool _isPageVisible(int currentPageNumber) {
     if (_pdfPages.isEmpty) {
@@ -4248,6 +4190,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 
   Future<void> _interactionUpdate(double zoomLevel) async {
     _pdfViewerController._zoomLevel = zoomLevel;
+    _pdfViewerController._notifyViewportChanged();
   }
 
   void _handleSinglePageViewZoomLevelChanged(double zoomLevel) {
@@ -4713,9 +4656,29 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
           ),
         );
       }
+      final int previousPageNumber = _previousPageNumber;
       _previousPageNumber = _pdfViewerController.pageNumber;
       _isPageChanged = true;
-      _checkMount();
+      if (kIsWeb || widget.pageLayoutMode == PdfPageLayoutMode.single) {
+        // Web visibility wrappers and the single-page controller need layout.
+        _checkMount();
+      } else {
+        // Continuous pages keep their geometry while scrolling. Rebuilding the
+        // entire document here makes every page update at each page boundary.
+        // The scroll overlay updates separately; only empty-page indicators
+        // around the old/new page numbers can change their appearance.
+        final Set<int> indicatorPages = <int>{
+          for (final int page in <int>[
+            previousPageNumber,
+            _pdfViewerController.pageNumber,
+          ])
+            for (int offset = -1; offset <= 1; offset++) page + offset,
+        };
+        for (final int page in indicatorPages) {
+          _pdfPagesKey[page]?.currentState
+              ?.refreshLoadingIndicator(previousPageNumber);
+        }
+      }
     }
   }
 
@@ -6709,6 +6672,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         ? (_maxScrollExtent - offset.dx)
         : offset.dx;
     _pdfViewerController._scrollPositionY = offset.dy;
+    _pdfViewerController._notifyViewportChanged();
+    _schedulePageRefresh();
   }
 
   /// Extracts and stores the width and height of each page from the PDF document.
@@ -6790,6 +6755,29 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 ///}
 /// ```
 class PdfViewerController extends ChangeNotifier with _ValueChangeNotifier {
+  final ChangeNotifier _viewportChanges = ChangeNotifier();
+  Offset? _lastViewportOffset;
+  double? _lastViewportZoom;
+
+  /// Notifies overlay clients when the effective scroll offset or zoom changes.
+  /// Page-number listeners do not describe movement within the same page.
+  Listenable get viewportChanges => _viewportChanges;
+
+  void _notifyViewportChanged() {
+    if (_lastViewportOffset == scrollOffset && _lastViewportZoom == zoomLevel) {
+      return;
+    }
+    _lastViewportOffset = scrollOffset;
+    _lastViewportZoom = zoomLevel;
+    _viewportChanges.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _viewportChanges.dispose();
+    super.dispose();
+  }
+
   /// Zoom level
   double _zoomLevel = 1;
 
