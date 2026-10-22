@@ -40,6 +40,8 @@ void main() {
           final bytes = Uint8List.fromList(document.saveSync());
           document.dispose();
           final controller = PdfViewerController();
+          int viewportEvents = 0;
+          controller.viewportChanges.addListener(() => viewportEvents++);
           addTearDown(() async {
             await tester.pumpWidget(const SizedBox());
             await tester.pump(const Duration(seconds: 3));
@@ -66,11 +68,11 @@ void main() {
           final page = tester.state<PdfPageViewState>(
             find.byType(PdfPageView).first,
           );
-          final requests = <Completer<Uint8List?>>[];
+          final requests = <({int page, Completer<Uint8List?> result})>[];
           messenger.setMockMethodCallHandler(channel, (call) async {
             if (call.method == 'getPage') {
               final request = Completer<Uint8List?>();
-              requests.add(request);
+              requests.add((page: (call.arguments as Map)['index'] as int, result: request));
               return request.future;
             }
             return null;
@@ -120,15 +122,25 @@ void main() {
             reason: 'Release and cancellation must allow the final raster',
           );
           // One-finger panning must still load pages entering the viewport.
-          requests.removeLast().complete(null);
+          requests.removeLast().result.complete(null);
           await tester.pump();
+          final eventsBeforePan = viewportEvents;
           final pan = await tester.startGesture(center, pointer: 33);
           await pan.moveBy(const Offset(0, -40));
           await pan.moveBy(const Offset(0, -40));
           page.getPageImage(const Size(800, 600), controller.zoomLevel);
           await tester.pump(const Duration(milliseconds: 150));
-          expect(requests, hasLength(1));
-          requests.single.complete(null);
+          // Restored neighbor prefetch may render page 2 as well. Each page
+          // must still own at most one request, within the shared native budget.
+          expect(requests.where((request) => request.page == 1), hasLength(1));
+          expect(requests.length, lessThanOrEqualTo(2));
+          expect(requests.map((request) => request.page).toSet().length,
+              requests.length);
+          for (final request in requests) {
+            request.result.complete(null);
+          }
+          requests.clear();
+          expect(viewportEvents, greaterThan(eventsBeforePan));
           await pan.up();
           await tester.pumpWidget(const SizedBox());
           await tester.pump(const Duration(seconds: 3));

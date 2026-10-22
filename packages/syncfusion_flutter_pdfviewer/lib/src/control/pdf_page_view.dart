@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:async/async.dart';
@@ -19,6 +20,7 @@ import '../common/pdfviewer_helper.dart';
 import '../form_fields/form_field_container.dart';
 import '../theme/theme.dart';
 import 'pdf_page_render_surface.dart';
+import 'pdf_raster_queue.dart';
 import 'pdf_scrollable.dart';
 import 'pdfviewer_canvas.dart';
 import 'single_page_view.dart';
@@ -76,7 +78,11 @@ class PdfPageView extends StatefulWidget {
     this.onAnnotationSelectionChanged,
     this.onStickyNoteDoubleTapped, {
     this.pageRenderColorFilter,
+    this.rasterQueue,
   }) : super(key: key);
+
+  /// Shared native rendering budget for this viewer.
+  final PdfRasterQueue? rasterQueue;
 
   /// Reading transformation shared by the base raster, zoom tiles and paper.
   final ColorFilter? pageRenderColorFilter;
@@ -268,6 +274,59 @@ class PdfPageViewState extends State<PdfPageView> {
   bool _isZooming = false;
   bool _rasterizationSuspended = false;
   bool _pageRasterRunning = false;
+  bool _viewportActive = true;
+  bool _pageVisible = true;
+  bool _baseRasterIsPreview = false;
+  double? _scheduledPageZoom;
+  String? _semanticLabel;
+
+  /// Decoded pixels retained by this page, excluding transient native buffers.
+  int get rasterBytes =>
+      (_pdfPage?.image?.width ?? 0) * (_pdfPage?.image?.height ?? 0) * 4 +
+      (_tileImage?.image?.width ?? 0) * (_tileImage?.image?.height ?? 0) * 4;
+
+  /// Invalidates offscreen work without starting another native request.
+  void setViewportActive(bool active, {bool visible = true}) {
+    final bool wasVisible = _pageVisible;
+    _pageVisible = active && visible;
+    if (!wasVisible && _pageVisible) {
+      widget.rasterQueue?.refreshPriorities();
+    }
+    if (_viewportActive == active) {
+      return;
+    }
+    _viewportActive = active;
+    if (!active) {
+      _rasterGeneration++;
+      _pendingPageRaster = null;
+      _pageTimer?.cancel();
+      _pageTimer = null;
+      widget.rasterQueue?.discardStale();
+    }
+  }
+
+  /// Refresh only this page when background accessibility text arrives.
+  void updateSemanticLabel(String? text) {
+    if (mounted && _semanticLabel != text) {
+      setState(() => _semanticLabel = text);
+    }
+  }
+
+  /// Only empty pages whose indicator visibility changed need a page refresh.
+  /// Loaded pages read the shared controller directly during interaction.
+  void refreshLoadingIndicator(int previousPageNumber) {
+    if (!mounted || _pdfPage != null || !widget.canShowPageLoadingIndicator) {
+      return;
+    }
+    final int pageNumber = widget.pageIndex + 1;
+    final bool wasNear = (pageNumber - previousPageNumber).abs() <= 1;
+    final bool isNear =
+        (pageNumber - widget.pdfViewerController.pageNumber).abs() <= 1;
+    if (wasNear != isNear) {
+      setState(() {});
+    }
+  }
+
   double? _runningPageZoom;
   int? _runningPageGeneration;
   int _rasterGeneration = 0;
@@ -295,10 +354,19 @@ class PdfPageViewState extends State<PdfPageView> {
         helper.hasPrimaryFocus = focusNode.hasFocus;
       });
     }
+    _semanticLabel = widget.semanticLabel;
     _formFields = widget.formFields
         .where((formField) => formField.pageNumber == widget.pageIndex + 1)
         .toList();
     super.initState();
+  }
+
+  @override
+  void didUpdateWidget(PdfPageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.semanticLabel != widget.semanticLabel) {
+      _semanticLabel = widget.semanticLabel;
+    }
   }
 
   @override
@@ -850,7 +918,7 @@ class PdfPageViewState extends State<PdfPageView> {
             SizedBox(
               width: widget.width,
               height: widget.height,
-              child: Semantics(label: widget.semanticLabel, child: _pdfPage),
+              child: Semantics(label: _semanticLabel, child: _pdfPage),
             ),
             if (_tileImageCache != null && _tileImage != null)
               Positioned(
@@ -950,11 +1018,17 @@ class PdfPageViewState extends State<PdfPageView> {
     Size viewportSize,
     double zoomLevel,
   ) async {
-    if (_rasterizationSuspended || _tileImageOperation != null) {
+    if (!_viewportActive ||
+        !_pageVisible ||
+        _rasterizationSuspended ||
+        _tileImageOperation != null) {
       return;
     }
     await _getImage(viewportSize, zoomLevel);
-    if (!mounted || _rasterizationSuspended || !_isTile ||
+    if (!mounted ||
+        !_viewportActive ||
+        _rasterizationSuspended ||
+        !_isTile ||
         _tileImageOperation != null) {
       return;
     }
@@ -1032,19 +1106,25 @@ class PdfPageViewState extends State<PdfPageView> {
           );
           final Stopwatch channelStopwatch = Stopwatch()..start();
           operation = CancelableOperation<Uint8List?>.fromFuture(
-            PdfViewerPlatform.instance.getTileImage(
-              widget.pageIndex + 1,
-              zoomLevel * _dpr * ratio,
-              exposed.left / zoomLevel,
-              exposed.top / zoomLevel,
-              tileImageSize.width,
-              tileImageSize.height,
-              widget.documentID,
+            _renderWhenCurrent(
+              () => PdfViewerPlatform.instance.getTileImage(
+                widget.pageIndex + 1,
+                zoomLevel * _dpr * ratio,
+                exposed.left / zoomLevel,
+                exposed.top / zoomLevel,
+                tileImageSize.width,
+                tileImageSize.height,
+                widget.documentID,
+              ),
+              generation,
             ),
           );
           _tileImageOperation = operation;
           final Uint8List? tileImage = await operation.valueOrCancellation();
-          if (tileImage == null || !mounted || _rasterizationSuspended ||
+          if (tileImage == null ||
+              !mounted ||
+              !_viewportActive ||
+              _rasterizationSuspended ||
               generation != _rasterGeneration ||
               zoomLevel != transformationController.value[0]) {
             return;
@@ -1053,7 +1133,9 @@ class PdfPageViewState extends State<PdfPageView> {
           final Stopwatch decodeStopwatch = Stopwatch()..start();
           final ui.Image image = await _createImage(
             tileImage, tileImageSize.width.toInt(), tileImageSize.height.toInt());
-          if (!mounted || _rasterizationSuspended ||
+          if (!mounted ||
+              !_viewportActive ||
+              _rasterizationSuspended ||
               generation != _rasterGeneration ||
               zoomLevel != transformationController.value[0]) {
             image.dispose();
@@ -1062,7 +1144,7 @@ class PdfPageViewState extends State<PdfPageView> {
           final ui.Image? previous = _tileImage?.image;
           setState(() {
             _tileImageCache = TileImage(
-              widget.pageIndex, tileImage,
+              widget.pageIndex,
               Rect.fromLTWH(exposed.left / zoomLevel, exposed.top / zoomLevel,
                   exposed.width / zoomLevel, exposed.height / zoomLevel),
               tileImageSize,
@@ -1088,7 +1170,9 @@ class PdfPageViewState extends State<PdfPageView> {
           if (identical(_tileImageOperation, operation)) {
             _tileImageOperation = null;
             // A gesture can end while this native tile request is still running.
-            if (mounted && !_rasterizationSuspended &&
+            if (mounted &&
+                _viewportActive &&
+                !_rasterizationSuspended &&
                 (generation != _rasterGeneration ||
                     zoomLevel != transformationController.value[0])) {
               unawaited(getTileImage(transformationController, viewportSize,
@@ -1102,15 +1186,26 @@ class PdfPageViewState extends State<PdfPageView> {
 
   /// Get the page image
   void getPageImage(Size viewportSize, double zoomLevel) {
-    if (_rasterizationSuspended) {
+    if (!_viewportActive || _rasterizationSuspended) {
       return;
     }
-    // Debounce intermediate zooms and capture the latest requested viewport.
+    // First visible pixels must not wait for scrolling to stop. Neighbors
+    // debounce once per zoom; repeated viewport events must not reset the timer.
+    if (_pageVisible && _pdfPage == null) {
+      _pageTimer?.cancel();
+      _pageTimer = null;
+      unawaited(_getImage(viewportSize, zoomLevel));
+      return;
+    }
+    if ((_pageTimer?.isActive ?? false) && _scheduledPageZoom == zoomLevel) {
+      return;
+    }
     _pageTimer?.cancel();
+    _scheduledPageZoom = zoomLevel;
     _pageTimer = Timer(Durations.short2, () {
       _pageTimer = null;
       if (mounted && widget.pdfPages.isNotEmpty) {
-        _getImage(viewportSize, zoomLevel);
+        unawaited(_getImage(viewportSize, zoomLevel));
       }
     });
   }
@@ -1125,6 +1220,7 @@ class PdfPageViewState extends State<PdfPageView> {
 
   /// Clear the page image
   void clearPageImage({bool dispose = false}) {
+    setViewportActive(false);
     _rasterGeneration++;
     _pendingPageRaster = null;
     final bool hasImage = _pdfPage != null || _tileImage != null;
@@ -1139,10 +1235,8 @@ class PdfPageViewState extends State<PdfPageView> {
       _pdfPage = null;
       _tileImage = null;
     }
-    _tileImageOperation?.cancel();
-    _pageImageOperation?.cancel();
-    _tileImageOperation = null;
-    _pageImageOperation = null;
+    // Native calls are not cancellable. Keep the running-operation guard until
+    // they actually return; generation checks discard their stale results.
     _tileImageCache = null;
     _pageTimer?.cancel();
     _pageTimer = null;
@@ -1166,13 +1260,10 @@ class PdfPageInfo {
 /// Information about the tile image
 class TileImage {
   /// Constructor of TileImage
-  TileImage(this.pageIndex, this.image, this.visibleRect, this.imageSize);
+  TileImage(this.pageIndex, this.visibleRect, this.imageSize);
 
   /// Page index
   final int pageIndex;
-
-  /// Tile image
-  final Uint8List image;
 
   /// Visible rect
   final Rect visibleRect;
