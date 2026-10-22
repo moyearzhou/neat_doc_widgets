@@ -1262,6 +1262,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   int? _trackpadPointer;
   VelocityTracker? _trackpadVelocity;
   bool _trackpadDidScale = false;
+  bool _isTouchScaling = false;
   late final PdfTrackpadMomentum _trackpadMomentum = PdfTrackpadMomentum(
     onUpdate: (offset) {
       final Offset before = _pdfViewerController.scrollOffset;
@@ -1666,6 +1667,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   /// Reset when PDF path is changed.
   void _reset() {
     _trackpadMomentum.stop();
+    _handleTouchScaleChanged(false);
     _trackpadSession = null;
     _trackpadPointer = null;
     _trackpadVelocity = null;
@@ -4007,6 +4009,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                       _scrollDirection,
                       _getTileImage,
                       children,
+                      onScaleGestureChanged: _handleTouchScaleChanged,
                       scrollbarSettings: widget.scrollbarSettings,
                       scrollThumbBuilder: widget.scrollThumbBuilder,
                     ),
@@ -4102,6 +4105,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                     _getTileImage,
                     key: _pdfScrollableStateKey,
                     onDoubleTap: _handleDoubleTap,
+                    onScaleGestureChanged: _handleTouchScaleChanged,
                     scrollbarSettings: widget.scrollbarSettings,
                     scrollThumbBuilder: widget.scrollThumbBuilder,
                   );
@@ -4733,9 +4737,30 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     return selectedTextLines ?? <PdfTextLine>[];
   }
 
+  void _handleTouchScaleChanged(bool scaling) {
+    if (_isTouchScaling == scaling) {
+      return;
+    }
+    _isTouchScaling = scaling;
+    if (scaling) {
+      // A previous gesture's delayed refresh must not run during a new pinch.
+      _tileTimer?.cancel();
+      _tileTimer = null;
+    }
+    for (final page in _pdfPagesKey.values) {
+      if (scaling) {
+        page.currentState?.suspendRasterization();
+      } else {
+        page.currentState?.resumeRasterization();
+      }
+    }
+    // Both layout modes request their final viewport after the end callback.
+    // A pan without any scale change never suspends pages entering the view.
+  }
+
   Future<void> _getTileImage() async {
     // Native trackpad updates transform the cached bitmap until release.
-    if (_trackpadSession != null && _trackpadDidScale) {
+    if (_isTouchScaling || (_trackpadSession != null && _trackpadDidScale)) {
       return;
     }
     if (kIsWeb || !Platform.environment.containsKey('FLUTTER_TEST')) {
@@ -4745,7 +4770,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       }
       _checkVisiblePages();
       _tileTimer ??= Timer(Durations.medium4, () async {
-        if ((_trackpadSession != null && _trackpadDidScale) || !mounted) {
+        if (_isTouchScaling ||
+            (_trackpadSession != null && _trackpadDidScale) || !mounted) {
           _tileTimer = null;
           return;
         }

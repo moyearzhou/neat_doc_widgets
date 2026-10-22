@@ -45,6 +45,7 @@ class PdfScrollable extends StatefulWidget {
     this.initiateTileRendering, {
     Key? key,
     this.onDoubleTap,
+    this.onScaleGestureChanged,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
   }) : super(key: key);
@@ -111,6 +112,9 @@ class PdfScrollable extends StatefulWidget {
 
   /// Triggered when double tap.
   final GestureTapCallback? onDoubleTap;
+
+  /// Pauses raster work only after this touch gesture actually changes scale.
+  final ValueChanged<bool>? onScaleGestureChanged;
 
   /// If True, scale is enabled
   final bool scaleEnabled;
@@ -271,6 +275,9 @@ class PdfScrollableState extends State<PdfScrollable> {
 
   /// Handles interaction update and updates the UI
   void _handleInteractionUpdate(ScaleUpdateDetails details) {
+    if ((details.scale - 1).abs() > .0001) {
+      widget.onScaleGestureChanged?.call(true);
+    }
     currentOffset = _transformationController.toScene(Offset.zero);
     _currentScale = _transformationController.value.getMaxScaleOnAxis();
     widget.onPdfOffsetChanged!.call(currentOffset);
@@ -305,6 +312,8 @@ class PdfScrollableState extends State<PdfScrollable> {
 
   /// Handles interaction end and updates the UI
   void _handleInteractionEnd(ScaleEndDetails details) {
+    // InteractiveViewer also ends the scale gesture on pointer cancellation.
+    widget.onScaleGestureChanged?.call(false);
     paddingWidthScale = 0;
     paddingHeightScale = 0;
     final double totalPdfPageWidth =
