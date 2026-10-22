@@ -41,13 +41,20 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
         channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "syncfusion_flutter_pdfviewer");
-        channel.setMethodCallHandler(this);
         context = flutterPluginBinding.getApplicationContext();
-        executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        // PdfRenderer permits one open page per document. Keep rendering, pixel
+        // copies and close on one worker so none of them blocks Android input or
+        // races a queued render. MethodChannel.Result supports worker replies.
+        executorService = Executors.newSingleThreadExecutor();
+        channel.setMethodCallHandler(this);
     }
 
     @Override
     public void onMethodCall(@NonNull final MethodCall call, @NonNull final Result result) {
+        executorService.execute(() -> handleMethodCall(call, result));
+    }
+
+    private void handleMethodCall(MethodCall call, Result result) {
         switch (call.method) {
             case "getPage":
                 getPage(call, result);
@@ -79,6 +86,23 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
         channel.setMethodCallHandler(null);
+        // Drain earlier requests before releasing their renderer and descriptor.
+        executorService.execute(() -> {
+            for (PdfFileRenderer document : documentRepo.values()) {
+                try {
+                    document.renderer.close();
+                } catch (IllegalStateException ignored) {
+                    // A renderer already closed by Android has no work left.
+                } finally {
+                    try {
+                        document.fileDescriptor.close();
+                    } catch (IOException ignored) {
+                        // The engine is detached; there is no caller to reply to.
+                    }
+                }
+            }
+            documentRepo.clear();
+        });
         executorService.shutdown();
     }
 
@@ -135,67 +159,63 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
     }
 
     private void initializePdfRenderer(MethodCall call, Result result) {
-        executorService.execute(() -> {
-            byte[] bytes = call.argument("documentBytes");
-            String documentID = call.argument("documentID");
-            String password = call.argument("password");
+        byte[] bytes = call.argument("documentBytes");
+        String documentID = call.argument("documentID");
+        String password = call.argument("password");
 
-            try {
-                File file = File.createTempFile(".syncfusion", ".pdf", context.getCacheDir());
-                try (FileOutputStream stream = new FileOutputStream(file)) {
-                    stream.write(bytes);
-                }
-
-                ParcelFileDescriptor fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
-
-                PdfRenderer renderer;
-
-                if (Build.VERSION.SDK_INT >= 35 && password != null) {
-                    renderer = createPdfRendererWithPassword(fileDescriptor, password);
-                } else {
-                    renderer = new PdfRenderer(fileDescriptor);
-                }
-
-                PdfFileRenderer fileRenderer = new PdfFileRenderer(fileDescriptor, renderer);
-                documentRepo.put(documentID, fileRenderer);
-                int pageCount = renderer.getPageCount();
-                file.delete();
-                result.success(String.valueOf(pageCount));
-            } catch (SecurityException e) {
-                result.error("PASSWORD_ERROR", "Incorrect password or document is encrypted", null);
-            } catch (Exception e) {
-                result.error("PDF_RENDERER_ERROR", e.getMessage(), null);
+        try {
+            File file = File.createTempFile(".syncfusion", ".pdf", context.getCacheDir());
+            try (FileOutputStream stream = new FileOutputStream(file)) {
+                stream.write(bytes);
             }
-        });
+
+            ParcelFileDescriptor fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+
+            PdfRenderer renderer;
+
+            if (Build.VERSION.SDK_INT >= 35 && password != null) {
+                renderer = createPdfRendererWithPassword(fileDescriptor, password);
+            } else {
+                renderer = new PdfRenderer(fileDescriptor);
+            }
+
+            PdfFileRenderer fileRenderer = new PdfFileRenderer(fileDescriptor, renderer);
+            documentRepo.put(documentID, fileRenderer);
+            int pageCount = renderer.getPageCount();
+            file.delete();
+            result.success(String.valueOf(pageCount));
+        } catch (SecurityException e) {
+            result.error("PASSWORD_ERROR", "Incorrect password or document is encrypted", null);
+        } catch (Exception e) {
+            result.error("PDF_RENDERER_ERROR", e.getMessage(), null);
+        }
     }
 
     private void loadPdfFromFile(MethodCall call, Result result) {
-        executorService.execute(() -> {
-            String path = call.argument("path");
-            String documentID = call.argument("documentID");
-            String password = call.argument("password");
+        String path = call.argument("path");
+        String documentID = call.argument("documentID");
+        String password = call.argument("password");
 
-            try {
-                File file = new File(path);
-                ParcelFileDescriptor fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
-                PdfRenderer renderer;
+        try {
+            File file = new File(path);
+            ParcelFileDescriptor fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+            PdfRenderer renderer;
 
-                if (Build.VERSION.SDK_INT >= 35 && password != null) {
-                        renderer = createPdfRendererWithPassword(fileDescriptor, password);
-                } else {
-                        renderer = new PdfRenderer(fileDescriptor);
-                }
-
-                PdfFileRenderer fileRenderer = new PdfFileRenderer(fileDescriptor, renderer);
-                documentRepo.put(documentID, fileRenderer);
-                int pageCount = renderer.getPageCount();
-                result.success(String.valueOf(pageCount));
-            } catch (SecurityException e) {
-                result.error("PASSWORD_ERROR", "Incorrect password or document is encrypted", null);
-            } catch (Exception e) {
-                result.error("PDF_RENDERER_ERROR", e.getMessage(), null);
+            if (Build.VERSION.SDK_INT >= 35 && password != null) {
+                renderer = createPdfRendererWithPassword(fileDescriptor, password);
+            } else {
+                renderer = new PdfRenderer(fileDescriptor);
             }
-        });
+
+            PdfFileRenderer fileRenderer = new PdfFileRenderer(fileDescriptor, renderer);
+            documentRepo.put(documentID, fileRenderer);
+            int pageCount = renderer.getPageCount();
+            result.success(String.valueOf(pageCount));
+        } catch (SecurityException e) {
+            result.error("PASSWORD_ERROR", "Incorrect password or document is encrypted", null);
+        } catch (Exception e) {
+            result.error("PDF_RENDERER_ERROR", e.getMessage(), null);
+        }
     }
 
     private PdfRenderer createPdfRendererWithPassword(ParcelFileDescriptor fileDescriptor, String password) throws Exception {
@@ -221,20 +241,18 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
             result.error("DOCUMENT_NOT_FOUND", "Document with ID " + documentID + " not found", null);
             return;
         }
-        executorService.execute(() -> {
-            try {
-                int count = fileRenderer.renderer.getPageCount();
-                double[] pageWidth = new double[count];
-                for (int i = 0; i < count; i++) {
-                    try (PdfRenderer.Page page = fileRenderer.renderer.openPage(i)) {
-                        pageWidth[i] = page.getWidth();
-                    }
+        try {
+            int count = fileRenderer.renderer.getPageCount();
+            double[] pageWidth = new double[count];
+            for (int i = 0; i < count; i++) {
+                try (PdfRenderer.Page page = fileRenderer.renderer.openPage(i)) {
+                    pageWidth[i] = page.getWidth();
                 }
-                result.success(pageWidth);
-            } catch (Exception e) {
-                result.error("PAGE_WIDTH_ERROR", e.getMessage(), null);
             }
-        });
+            result.success(pageWidth);
+        } catch (Exception e) {
+            result.error("PAGE_WIDTH_ERROR", e.getMessage(), null);
+        }
     }
 
     private void getPagesHeight(MethodCall call, Result result) {
@@ -244,20 +262,18 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
             result.error("DOCUMENT_NOT_FOUND", "Document with ID " + documentID + " not found", null);
             return;
         }
-        executorService.execute(() -> {
-            try {
-                int count = fileRenderer.renderer.getPageCount();
-                double[] pageHeight = new double[count];
-                for (int i = 0; i < count; i++) {
-                    try (PdfRenderer.Page page = fileRenderer.renderer.openPage(i)) {
-                        pageHeight[i] = page.getHeight();
-                    }
+        try {
+            int count = fileRenderer.renderer.getPageCount();
+            double[] pageHeight = new double[count];
+            for (int i = 0; i < count; i++) {
+                try (PdfRenderer.Page page = fileRenderer.renderer.openPage(i)) {
+                    pageHeight[i] = page.getHeight();
                 }
-                result.success(pageHeight);
-            } catch (Exception e) {
-                result.error("PAGE_HEIGHT_ERROR", e.getMessage(), null);
             }
-        });
+            result.success(pageHeight);
+        } catch (Exception e) {
+            result.error("PAGE_HEIGHT_ERROR", e.getMessage(), null);
+        }
     }
 
     private void closeDocument(MethodCall call, Result result) {

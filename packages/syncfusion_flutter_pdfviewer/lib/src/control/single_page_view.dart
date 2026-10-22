@@ -61,6 +61,7 @@ class SinglePageView extends StatefulWidget {
     this.scrollDirection,
     this.onInteractionEnd,
     this.children, {
+    this.onScaleGestureChanged,
     this.scrollbarSettings = const PdfScrollbarSettings(),
     this.scrollThumbBuilder,
   }) : super(key: key);
@@ -146,6 +147,9 @@ class SinglePageView extends StatefulWidget {
 
   /// Triggered when interaction end.
   final VoidCallback? onInteractionEnd;
+
+  /// Notifies the owner before touch scale updates or final raster requests.
+  final ValueChanged<bool>? onScaleGestureChanged;
 
   @override
   SinglePageViewState createState() => SinglePageViewState();
@@ -516,6 +520,9 @@ class SinglePageViewState extends State<SinglePageView> {
                   _currentPageTransformationController.toScene(Offset.zero);
             },
             onInteractionUpdate: (ScaleUpdateDetails details) {
+              if ((details.scale - 1).abs() > .0001) {
+                widget.onScaleGestureChanged?.call(true);
+              }
               _panUpdateOffset =
                   widget.scrollDirection == PdfScrollDirection.horizontal
                       ? details.localFocalPoint.dx
@@ -543,6 +550,7 @@ class SinglePageViewState extends State<SinglePageView> {
               );
             },
             onInteractionEnd: (ScaleEndDetails details) {
+              widget.onScaleGestureChanged?.call(false);
               if (widget.interactionMode == PdfInteractionMode.pan) {
                 final double pannedDistance =
                     (_panStartOffset - _panUpdateOffset).abs();
