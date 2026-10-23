@@ -3,6 +3,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:syncfusion_flutter_pdfviewer/src/control/pdf_native_render_bridge.dart';
 
 void main() {
+  test('native buffer releases exactly once on duplicate cleanup', () {
+    int releases = 0;
+    final buffer = PdfNativePixelBuffer(Uint8List(4), () => releases++);
+    buffer.dispose();
+    buffer.dispose();
+    expect(releases, 1);
+    expect(() => buffer.pixels, throwsStateError);
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
   const bridge = PdfNativeRenderBridge();
   const channel = MethodChannel('syncfusion_flutter_pdfviewer');
@@ -28,6 +37,80 @@ void main() {
       expect((calls[0].arguments as Map)['renderPriority'], 1);
       expect((calls[1].arguments as Map)['renderPriority'], 0);
       expect((calls[1].arguments as Map)['documentID'], 'reader');
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.ohos}),
+  );
+
+  testWidgets(
+    'OHOS detail forwards region and prewarm priority',
+    (tester) async {
+      await bridge.getTileImage(2, 3, 4, 5, 6, 7, 'reader', visible: false);
+      await bridge.getTileImage(2, 3, 4, 5, 6, 7, 'reader', visible: true);
+      expect(calls.map((call) => call.method), [
+        'getTileImage',
+        'getTileImage',
+      ]);
+      expect(calls[0].arguments, {
+        'pageNumber': 2,
+        'scale': 3.0,
+        'x': 4.0,
+        'y': 5.0,
+        'width': 6.0,
+        'height': 7.0,
+        'documentID': 'reader',
+        'renderPriority': 1,
+      });
+      expect((calls[1].arguments as Map)['renderPriority'], 0);
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.ohos}),
+  );
+
+  testWidgets(
+    'older native binary falls back for detail pixels',
+    (tester) async {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        if (call.method == 'getTileBuffer') {
+          throw MissingPluginException();
+        }
+        return Uint8List.fromList([1, 2, 3, 4]);
+      });
+      final buffer = await bridge.getDetailBuffer(
+        2,
+        3,
+        4,
+        5,
+        1,
+        1,
+        'reader',
+        visible: true,
+      );
+      expect(calls.map((call) => call.method), [
+        'getTileBuffer',
+        'getTileImage',
+      ]);
+      expect(buffer!.pixels, [1, 2, 3, 4]);
+      buffer.dispose();
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.ohos}),
+  );
+
+  testWidgets(
+    'stale native detail does not allocate pixels',
+    (tester) async {
+      final buffer = await bridge.getDetailBuffer(
+        2,
+        3,
+        4,
+        5,
+        1,
+        1,
+        'reader',
+        visible: false,
+      );
+      expect(buffer, isNull);
+      expect(calls.single.method, 'getTileBuffer');
+      expect((calls.single.arguments as Map)['renderPriority'], 1);
     },
     variant: const TargetPlatformVariant({TargetPlatform.ohos}),
   );

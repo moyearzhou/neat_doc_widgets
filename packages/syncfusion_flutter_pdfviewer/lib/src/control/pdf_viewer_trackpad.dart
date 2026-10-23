@@ -110,7 +110,14 @@ extension _PdfViewerTrackpad on SfPdfViewerState {
         identifier: 'zoomLevel_${widget.key}',
       );
       _previousTiledZoomLevel = _pdfViewerController.zoomLevel;
-      _checkMount();
+      // Pure continuous pan already updates the transform and viewport cache.
+      // Rebuilding here recreates every page at each release in a long PDF.
+      // Zoom, single-page layout and web visibility still require final layout.
+      if (_trackpadDidScale ||
+          kIsWeb ||
+          widget.pageLayoutMode == PdfPageLayoutMode.single) {
+        _checkMount();
+      }
       _getTileImage();
     }
   }

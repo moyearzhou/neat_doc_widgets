@@ -149,6 +149,7 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       case 'getPageAsBgra':
         await this.getPage(call, result, true);
         break;
+      case 'getTileBuffer':
       case 'getTileImage':
         // 实现瓦片图像渲染逻辑
         this.getTileImage(call, result);
@@ -379,7 +380,7 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
           label: `document=${documentID} page=${index} generation=${requestGeneration} ` +
             `size=${outputWidth}x${outputHeight} format=${outputBgra ? 'bgra' : 'rgba'}`
         });
-        if (page === null) {
+        if (page === null || typeof page === 'number') {
           LogUtil.info(`Syncfusion PDF PDFium page superseded: page=${index}, ` +
             `generation=${requestGeneration}, durationMs=${Date.now() - startedAt}`);
           result.success(null);
@@ -448,11 +449,17 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
 
       // Syncfusion supplies x/y in unscaled page coordinates and scale already includes DPR.
       const pageIndex = pageNumber - 1;
+      const requestedPriority: number | undefined = call.argument('renderPriority');
+      const viewportRequest = requestedPriority === 0 || requestedPriority === 1;
+      if (viewportRequest) {
+        docInfo.pageRenderPriority[pageIndex] = requestedPriority as number;
+      }
       const requestGeneration = (docInfo.tileRequestGeneration[pageIndex] ?? 0) + 1;
       docInfo.tileRequestGeneration[pageIndex] = requestGeneration;
       const startedAt = Date.now();
       LogUtil.info(`Syncfusion PDF PDFium tile request: page=${pageNumber}, width=${Math.floor(width)}, ` +
         `height=${Math.floor(height)}, scale=${scale}, generation=${requestGeneration}`);
+      const returnHandle = call.method === 'getTileBuffer';
       const tile = await this.renderQueue.render({
         execute: () => pdfRenderer.renderTile(
           docInfo.pdfiumDocumentId as number,
@@ -462,13 +469,22 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
           Math.floor(width),
           Math.floor(height),
           scale,
-          requestGeneration
+          requestGeneration,
+          returnHandle
         ),
+        onDiscard: (value: Uint8Array | number): void => {
+          if (typeof value === 'number') {
+            pdfRenderer.releasePixelBuffer(value);
+          }
+        },
         isCurrent: (): boolean => this.documentRepo.get(documentID) === docInfo &&
           docInfo.tileRequestGeneration[pageIndex] === requestGeneration &&
           docInfo.pageRenderActive[pageIndex] !== false &&
-          (docInfo.pageRenderPriority[pageIndex] ?? 0) === 0,
-        priority: (): number => 0,
+          // Explicit viewport requests can prewarm nearby detail while legacy
+          // callers retain their visible-only contract. Departure still cancels.
+          (viewportRequest || (docInfo.pageRenderPriority[pageIndex] ?? 0) === 0),
+        priority: (): number => viewportRequest ?
+          (docInfo.pageRenderPriority[pageIndex] ?? requestedPriority as number) : 0,
         label: `document=${documentID} tile page=${pageNumber} generation=${requestGeneration} ` +
           `size=${Math.floor(width)}x${Math.floor(height)}`
       });
@@ -480,11 +496,11 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       }
       LogUtil.info(`Syncfusion PDF PDFium tile rendered: page=${pageNumber}, width=${Math.floor(width)}, ` +
         `height=${Math.floor(height)}, scale=${scale}, generation=${requestGeneration}, ` +
-        `durationMs=${Date.now() - startedAt}, bytes=${tile.length}`);
+        `durationMs=${Date.now() - startedAt}, bytes=${Math.floor(width) * Math.floor(height) * 4}`);
       const replyStartedAt = Date.now();
       result.success(tile);
       LogUtil.info(`[Syncfusion PDF][arktsTileReply] document=${documentID}, page=${pageNumber}, ` +
-        `bytes=${tile.length}, replyMs=${Date.now() - replyStartedAt}`);
+        `bytes=${Math.floor(width) * Math.floor(height) * 4}, replyMs=${Date.now() - replyStartedAt}`);
     } catch (error) {
       LogUtil.error('Syncfusion PDF getTileImage failed with error : ' + error);
       result.error(error.code, error.message, error);

@@ -16,6 +16,115 @@ extension _PdfViewerPageLoading on SfPdfViewerState {
     });
   }
 
+  /// Preserve a point on the first visible page, not a fraction of the whole
+  /// document (mixed page sizes and spacing make that fraction drift).
+  void _preserveReadingPosition(Size nextSize) {
+    _viewportWidth = nextSize.width;
+    _deviceOrientation = MediaQuery.of(context).orientation;
+    if (nextSize == _viewportSize ||
+        nextSize.isEmpty ||
+        _viewportSize.isEmpty ||
+        _pdfPages.isEmpty ||
+        widget.pageLayoutMode != PdfPageLayoutMode.continuous) {
+      return;
+    }
+    final int generation = ++_viewportResizeGeneration;
+    final PdfDocument? document = _document;
+    final double zoom = _transformationController.value[0];
+    final Offset offset = _transformationController.toScene(Offset.zero);
+    final List<int> visible = _visiblePageNumbers(
+      offset & Size(_viewportSize.width / zoom, _viewportSize.height / zoom),
+    );
+    if (visible.isEmpty) {
+      return;
+    }
+    final int number = visible.first;
+    final PdfPageInfo page = _pdfPages[number]!;
+    final bool vertical = _scrollDirection == PdfScrollDirection.vertical;
+    final Offset origin =
+        vertical ? Offset(0, page.pageOffset) : Offset(page.pageOffset, 0);
+    final Offset relative = offset - origin;
+    final Offset fraction = Offset(
+      relative.dx / page.pageSize.width,
+      relative.dy / page.pageSize.height,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _viewportResizeGeneration ||
+          !identical(document, _document) ||
+          vertical != (_scrollDirection == PdfScrollDirection.vertical) ||
+          widget.pageLayoutMode != PdfPageLayoutMode.continuous) {
+        return;
+      }
+      final PdfPageInfo? updated = _pdfPages[number];
+      if (updated == null) {
+        return;
+      }
+      final Offset newOrigin =
+          vertical
+              ? Offset(0, updated.pageOffset)
+              : Offset(updated.pageOffset, 0);
+      final Offset target =
+          newOrigin +
+          Offset(
+            fraction.dx * updated.pageSize.width,
+            fraction.dy * updated.pageSize.height,
+          );
+      // Let the scrollable receive its new content dimensions before clamping.
+      _checkMount();
+      _pdfScrollableStateKey.currentState?.forcePixels(target);
+      _pdfPagesKey[number]?.currentState?.canvasRenderBox
+          ?.updateContextMenuPosition();
+    });
+  }
+
+  /// A leading throttle: repeated scroll updates keep the latest geometry,
+  /// rather than postponing all high-DPI work until scrolling has stopped.
+  void _scheduleDetailRefresh() {
+    if (!mounted ||
+        _isTouchScaling ||
+        (_trackpadSession != null && _trackpadDidScale) ||
+        _tileTimer != null) {
+      return;
+    }
+    _tileTimer = Timer(const Duration(milliseconds: 80), () {
+      _tileTimer = null;
+      if (!mounted ||
+          _isTouchScaling ||
+          (_trackpadSession != null && _trackpadDidScale) ||
+          _pdfPages.isEmpty ||
+          _viewportSize.isEmpty) {
+        return;
+      }
+      _checkVisiblePages();
+      final double zoom = _transformationController.value[0];
+      final Offset offset = _transformationController.toScene(Offset.zero);
+      final Rect view =
+          offset &
+          Size(_viewportSize.width / zoom, _viewportSize.height / zoom);
+      final Rect ahead = view.inflate(
+        (_scrollDirection == PdfScrollDirection.vertical
+                ? view.height
+                : view.width) *
+            0.5,
+      );
+      final Iterable<int> nearby =
+          widget.pageLayoutMode == PdfPageLayoutMode.single
+              ? const <int>[]
+              : _visiblePageNumbers(ahead);
+      for (final int page in <int>{..._renderedImages, ...nearby}) {
+        if (_cachedImagePages.contains(page)) {
+          _pdfPagesKey[page]?.currentState?.getTileImage(
+            _transformationController,
+            _viewportSize,
+            zoom,
+            prefetch: !_renderedImages.contains(page),
+          );
+        }
+      }
+    });
+  }
+
   HoverTextLoader _ensureHoverTextLoader() =>
       _hoverText ??= HoverTextLoader(
         extract: (int page, bool Function() isCurrent) async {

@@ -19,15 +19,17 @@ function deferred() {
   const promise = new Promise(yes => { resolve = yes; });
   return { promise, resolve };
 }
-function fixture() {
+function fixture({handleTiles = false} = {}) {
   const order = [];
+  const released = [];
   const gate = deferred();
   const renderer = {
     renderPage: async (document, page, width) => {
       order.push(`${document}:${page}:${width}`);
       return width === 10 ? gate.promise : new Uint8Array([width]);
     },
-    renderTile: async () => { order.push('tile'); return new Uint8Array([9]); },
+    renderTile: async (...args) => { order.push('tile'); return handleTiles && args[8] ? gate.promise : new Uint8Array([9]); },
+    releasePixelBuffer: handle => released.push(handle),
     closeDocument: () => {},
   };
   const mocks = {
@@ -65,7 +67,7 @@ function fixture() {
   function state(index, active, visible, invalidate = false) {
     return call('updateRenderState', { documentID: 'reader', index, active, visible, invalidate });
   }
-  return { order, gate, page, state, call };
+  return { order, gate, page, state, call, released };
 }
 
 test('RGBA visible pages overtake queued RGBA previews and legacy thumbnails', async () => {
@@ -130,4 +132,60 @@ test('closing the document settles its pending channel results safely', async ()
   f.gate.resolve(null);
   await active;
   assert.deepEqual(f.order, ['2:0:10']);
+});
+
+test('nearby detail prewarms behind visible work and is cancelled on departure', async () => {
+  const f = fixture();
+  const active = f.page(1, 10, undefined, 'other');
+  const prewarm = f.call('getTileImage', { documentID: 'reader', pageNumber: 2,
+    scale: 2, x: 0, y: 0, width: 1, height: 1, renderPriority: 1 });
+  const visible = f.page(3, 40, 0);
+  f.gate.resolve(null);
+  const results = await Promise.all([active, prewarm, visible]);
+  assert.deepEqual(f.order, ['2:0:10', '1:2:40', 'tile']);
+  assert.deepEqual(results[1], new Uint8Array([9]));
+
+  const g = fixture();
+  const busy = g.page(1, 10, undefined, 'other');
+  const stale = g.call('getTileImage', { documentID: 'reader', pageNumber: 2,
+    scale: 2, x: 0, y: 0, width: 1, height: 1, renderPriority: 1 });
+  await g.state(2, false, false);
+  assert.equal(await stale, null);
+  g.gate.resolve(null);
+  await busy;
+  assert.deepEqual(g.order, ['2:0:10']);
+});
+
+test('queued detail promotion follows the latest viewport state', async () => {
+  const f = fixture();
+  const active = f.page(1, 10, undefined, 'other');
+  const prewarm = f.call('getTileImage', { documentID: 'reader', pageNumber: 2,
+    scale: 2, x: 0, y: 0, width: 1, height: 1, renderPriority: 1 });
+  const visible = f.page(3, 40, 0);
+  await f.state(2, true, true);
+  await f.state(3, true, false);
+  f.gate.resolve(null);
+  await Promise.all([active, prewarm, visible]);
+  assert.deepEqual(f.order, ['2:0:10', 'tile', '1:2:40']);
+});
+
+test('native tile handle is released on viewport departure during execution', async () => {
+  const f = fixture({handleTiles: true});
+  const tile = f.call('getTileBuffer', { documentID: 'reader', pageNumber: 2,
+    scale: 2, x: 0, y: 0, width: 1, height: 1, renderPriority: 0 });
+  await flush();
+  await f.state(2, false, false);
+  f.gate.resolve(42);
+  assert.equal(await tile, null);
+  assert.deepEqual(f.released, [42]);
+});
+test('current native tile transfers only handle and preserves priority', async () => {
+  const f = fixture({handleTiles: true});
+  const tile = f.call('getTileBuffer', { documentID: 'reader', pageNumber: 2,
+    scale: 2, x: 0, y: 0, width: 1, height: 1, renderPriority: 1 });
+  await flush();
+  f.gate.resolve(43);
+  assert.equal(await tile, 43);
+  assert.deepEqual(f.order, ['tile']);
+  assert.deepEqual(f.released, []);
 });

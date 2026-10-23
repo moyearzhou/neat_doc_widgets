@@ -65,6 +65,10 @@ void main() {
             await tester.pump();
           }
           expect(controller.pageCount, 2);
+          // Let initial layout/detail scheduling finish before observing pinch
+          // requests. The production scheduler also runs in widget tests now.
+          await tester.pump(const Duration(seconds: 1));
+          await tester.pump();
           final page = tester.state<PdfPageViewState>(
             find.byType(PdfPageView).first,
           );
@@ -98,7 +102,7 @@ void main() {
                   .transformationController!;
           expect(transform.value.getMaxScaleOnAxis(), greaterThan(1.1));
           // Exercise the real raster entry point even if an earlier timer fires
-          // during a new pinch. Widget-test viewer timers are otherwise disabled.
+          // during a new pinch. Initial layout requests have already settled.
           page.getPageImage(const Size(800, 600), 1.3);
           await tester.pump(const Duration(milliseconds: 150));
           expect(
@@ -117,12 +121,18 @@ void main() {
           page.getPageImage(const Size(800, 600), controller.zoomLevel);
           await tester.pump(const Duration(milliseconds: 150));
           expect(
-            requests,
+            requests.where((request) => request.page == 1),
             hasLength(1),
             reason: 'Release and cancellation must allow the final raster',
           );
           // One-finger panning must still load pages entering the viewport.
-          requests.removeLast().result.complete(null);
+          expect(requests.length, lessThanOrEqualTo(2));
+          expect(requests.map((request) => request.page).toSet().length,
+              requests.length);
+          for (final request in requests) {
+            request.result.complete(null);
+          }
+          requests.clear();
           await tester.pump();
           final eventsBeforePan = viewportEvents;
           final pan = await tester.startGesture(center, pointer: 33);

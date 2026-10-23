@@ -30,6 +30,25 @@ std::unordered_map<uint64_t, int32_t> gLatestPageRequests;
 int32_t gNextDocumentId = 1;
 bool gPdfiumInitialized = false;
 
+// Pixel handles avoid sending multi-megabyte external typed data into Dart's
+// GC accounting. Dart borrows the pointer until ImmutableBuffer has copied it.
+std::mutex gPixelMutex;
+std::unordered_map<int64_t, std::vector<uint8_t>> gPixelBuffers;
+int64_t gNextPixelHandle = 1;
+size_t gPixelBytes = 0;
+
+int64_t RetainPixels(std::vector<uint8_t>& pixels) {
+  std::lock_guard<std::mutex> lock(gPixelMutex);
+  // Bound abandoned results too (for example after an engine disconnect).
+  if (gPixelBuffers.size() >= 4 || gPixelBytes + pixels.size() > 256 * 1024 * 1024) {
+    return 0;
+  }
+  const int64_t handle = gNextPixelHandle++;
+  gPixelBytes += pixels.size();
+  gPixelBuffers.emplace(handle, std::move(pixels));
+  return handle;
+}
+
 struct RenderTileWork {
   napi_env env = nullptr;
   napi_async_work work = nullptr;
@@ -41,6 +60,7 @@ struct RenderTileWork {
   int32_t width = 0;
   int32_t height = 0;
   double scale = 0;
+  bool returnHandle = false;
   int32_t requestGeneration = 0;
   RenderClock::time_point queuedAt = RenderClock::now();
   std::vector<uint8_t> pixels;
@@ -473,6 +493,17 @@ void CompleteRenderTile(napi_env env, napi_status status, void* data) {
     napi_value error;
     napi_create_string_utf8(env, request->error.c_str(), NAPI_AUTO_LENGTH, &error);
     napi_reject_deferred(env, request->deferred, error);
+  } else if (request->returnHandle) {
+    const int64_t handle = RetainPixels(request->pixels);
+    if (handle == 0) {
+      napi_value error;
+      napi_create_string_utf8(env, "PDF pixel handle capacity exceeded", NAPI_AUTO_LENGTH, &error);
+      napi_reject_deferred(env, request->deferred, error);
+    } else {
+      napi_value result;
+      napi_create_int64(env, handle, &result);
+      napi_resolve_deferred(env, request->deferred, result);
+    }
   } else {
     const size_t headerSize = StandardCodecUint8HeaderSize(request->pixels.size());
     void* bufferData = nullptr;
@@ -492,9 +523,9 @@ void CompleteRenderTile(napi_env env, napi_status status, void* data) {
 }
 
 napi_value RenderTile(napi_env env, napi_callback_info info) {
-  size_t argc = 8;
-  napi_value argv[8];
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 8) {
+  size_t argc = 9;
+  napi_value argv[9];
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 8) {
     ThrowError(env, "renderTile requires document, page, x, y, width, height, scale and generation");
     return nullptr;
   }
@@ -511,6 +542,12 @@ napi_value RenderTile(napi_env env, napi_callback_info info) {
       !GetInt32(env, argv[7], &request->requestGeneration)) {
     delete request;
     ThrowError(env, "renderTile received invalid argument types");
+    return nullptr;
+  }
+
+  if (argc >= 9 && !GetBool(env, argv[8], &request->returnHandle)) {
+    delete request;
+    ThrowError(env, "renderTile received invalid handle flag");
     return nullptr;
   }
 
@@ -548,6 +585,30 @@ napi_value RenderTile(napi_env env, napi_callback_info info) {
   return promise;
 }
 
+void ReleasePixels(int64_t handle) {
+  std::lock_guard<std::mutex> lock(gPixelMutex);
+  const auto entry = gPixelBuffers.find(handle);
+  if (entry != gPixelBuffers.end()) {
+    gPixelBytes -= entry->second.size();
+    gPixelBuffers.erase(entry);
+  }
+}
+
+napi_value ReleasePixelBuffer(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  int64_t handle = 0;
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 1 ||
+      napi_get_value_int64(env, argv[0], &handle) != napi_ok) {
+    ThrowError(env, "releasePixelBuffer requires a handle");
+    return nullptr;
+  }
+  ReleasePixels(handle);
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
 napi_value Init(napi_env env, napi_value exports) {
   {
     std::lock_guard<std::mutex> lock(gPdfiumMutex);
@@ -562,6 +623,7 @@ napi_value Init(napi_env env, napi_value exports) {
       {"closeDocument", nullptr, CloseDocument, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"renderPage", nullptr, RenderPage, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"renderTile", nullptr, RenderTile, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"releasePixelBuffer", nullptr, ReleasePixelBuffer, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, exports, sizeof(descriptors) / sizeof(descriptors[0]), descriptors);
   return exports;
@@ -575,6 +637,11 @@ void CleanupPdfium() {
   gDocuments.clear();
   gLatestTileRequests.clear();
   gLatestPageRequests.clear();
+  {
+    std::lock_guard<std::mutex> pixelsLock(gPixelMutex);
+    gPixelBuffers.clear();
+    gPixelBytes = 0;
+  }
   if (gPdfiumInitialized) {
     FPDF_DestroyLibrary();
     gPdfiumInitialized = false;
@@ -582,6 +649,23 @@ void CleanupPdfium() {
 }
 
 }  // namespace
+
+// These FFI calls only borrow/release completed pixels; PDFium still runs on
+// the existing asynchronous queue. Never render PDF content on Dart's UI thread.
+extern "C" __attribute__((visibility("default"))) const uint8_t*
+ZotpaperPdfGetPixels(int64_t handle, int64_t expectedLength) {
+  std::lock_guard<std::mutex> lock(gPixelMutex);
+  const auto entry = gPixelBuffers.find(handle);
+  if (entry == gPixelBuffers.end() || expectedLength <= 0 ||
+      entry->second.size() != static_cast<size_t>(expectedLength)) {
+    return nullptr;
+  }
+  return entry->second.data();
+}
+
+extern "C" __attribute__((visibility("default"))) void ZotpaperPdfReleasePixels(int64_t handle) {
+  ReleasePixels(handle);
+}
 
 static napi_module gPdfRendererModule = {
     .nm_version = 1,

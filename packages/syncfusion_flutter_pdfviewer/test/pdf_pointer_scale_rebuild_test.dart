@@ -141,6 +141,69 @@ void main() {
             1,
             reason: 'Mouse wheel scrolling must not become zoom after touch',
           );
+          if (layout == PdfPageLayoutMode.continuous) {
+            // Pure trackpad pan already updates the transform and page cache.
+            // Ending it must not rebuild every page in a long document.
+            final beforePan = <int, PdfPageView>{
+              for (final element in find.byType(PdfPageView).evaluate())
+                (element.widget as PdfPageView).pageIndex:
+                    element.widget as PdfPageView,
+            };
+            controller.handleTrackpadGesture(
+              PointerPanZoomStartEvent(pointer: 71, position: position),
+            );
+            controller.handleTrackpadGesture(
+              PointerPanZoomUpdateEvent(
+                pointer: 71,
+                position: position,
+                pan: const Offset(0, -50),
+                timeStamp: const Duration(milliseconds: 30),
+              ),
+            );
+            await tester.pump();
+            expect(controller.scrollOffset.dy, greaterThan(0));
+            controller.handleTrackpadGesture(
+              PointerPanZoomEndEvent(
+                pointer: 71,
+                position: position,
+                timeStamp: const Duration(milliseconds: 60),
+              ),
+            );
+            await tester.pump();
+            for (final element in find.byType(PdfPageView).evaluate()) {
+              final page = element.widget as PdfPageView;
+              expect(
+                page,
+                same(beforePan[page.pageIndex]),
+                reason: 'Pure pan end must retain page widget identities',
+              );
+            }
+            controller.handleTrackpadGesture(
+              PointerPanZoomStartEvent(pointer: 72, position: position),
+            );
+            controller.handleTrackpadGesture(
+              PointerPanZoomUpdateEvent(
+                pointer: 72,
+                position: position,
+                scale: 1.5,
+                timeStamp: const Duration(milliseconds: 100),
+              ),
+            );
+            controller.handleTrackpadGesture(
+              PointerPanZoomEndEvent(
+                pointer: 72,
+                position: position,
+                timeStamp: const Duration(milliseconds: 130),
+              ),
+            );
+            await tester.pump();
+            expect(controller.zoomLevel, closeTo(1.5, .001));
+            expect(
+              tester.widget<PdfPageView>(find.byType(PdfPageView).first),
+              isNot(same(beforePan[0])),
+              reason: 'Scale end must still refresh page layout',
+            );
+          }
           expect(tester.takeException(), isNull);
           await tester.pumpWidget(const SizedBox());
           await tester.pump(const Duration(seconds: 3));

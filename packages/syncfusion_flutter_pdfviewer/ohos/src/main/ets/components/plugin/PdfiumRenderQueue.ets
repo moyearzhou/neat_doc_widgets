@@ -1,6 +1,7 @@
 export interface PdfiumRenderRequest {
-  execute: () => Promise<Uint8Array | null>;
+  execute: () => Promise<Uint8Array | number | null>;
   isCurrent: () => boolean;
+  onDiscard?: (value: Uint8Array | number) => void;
   // Evaluated at dispatch: a queued neighbor may enter or leave the viewport.
   priority: () => number;
   label: string;
@@ -8,7 +9,7 @@ export interface PdfiumRenderRequest {
 
 interface PendingRender {
   request: PdfiumRenderRequest;
-  resolve: (value: Uint8Array | null) => void;
+  resolve: (value: Uint8Array | number | null) => void;
   reject: (reason: Error) => void;
   queuedAt: number;
 }
@@ -26,8 +27,8 @@ export class PdfiumRenderQueue {
     this.onDispatch = onDispatch;
   }
 
-  render(request: PdfiumRenderRequest): Promise<Uint8Array | null> {
-    return new Promise<Uint8Array | null>((resolve, reject) => {
+  render(request: PdfiumRenderRequest): Promise<Uint8Array | number | null> {
+    return new Promise<Uint8Array | number | null>((resolve, reject) => {
       const task: PendingRender = { request: request, resolve: resolve,
         reject: reject, queuedAt: Date.now() };
       this.pending.push(task);
@@ -68,7 +69,14 @@ export class PdfiumRenderQueue {
       foreground, this.pending.length - foreground);
     try {
       const pixels = await task.request.execute();
-      task.resolve(task.request.isCurrent() ? pixels : null);
+      if (task.request.isCurrent()) {
+        task.resolve(pixels);
+      } else {
+        if (pixels !== null && task.request.onDiscard !== undefined) {
+          task.request.onDiscard(pixels);
+        }
+        task.resolve(null);
+      }
     } catch (error) {
       task.reject(error as Error);
     } finally {

@@ -2,9 +2,86 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:syncfusion_flutter_pdfviewer/src/control/pdf_native_render_bridge.dart';
 import 'package:syncfusion_flutter_pdfviewer/src/control/pdf_raster_queue.dart';
 
 void main() {
+  for (final disposed in [false, true]) {
+    test(
+      'typed pixel owners release after ${disposed ? 'dispose' : 'departure'}',
+      () async {
+        for (int i = 0; i < 12; i++) {
+          final queue = PdfRasterQueue(maxConcurrent: 1);
+          final native = Completer<PdfNativePixelBuffer?>();
+          int releases = 0;
+          bool current = true;
+          final first = queue.renderResource<PdfNativePixelBuffer>(
+            () => native.future,
+            () => current,
+            onDiscard: (buffer) => buffer.dispose(),
+          );
+          final next = queue.renderResource<PdfNativePixelBuffer>(
+            () async => null,
+            () => true,
+            onDiscard: (buffer) => buffer.dispose(),
+          );
+          if (disposed) {
+            queue.dispose();
+          } else {
+            current = false;
+          }
+          native.complete(PdfNativePixelBuffer(Uint8List(4), () => releases++));
+          expect(await first, isNull);
+          expect(releases, 1);
+          expect(await next, isNull);
+          queue.dispose();
+        }
+      },
+    );
+  }
+  for (final dispose in [false, true]) {
+    test(
+      'native resource is released when ${dispose ? 'disposed' : 'stale'}',
+      () async {
+        final queue = PdfRasterQueue(maxConcurrent: 1);
+        final native = Completer<Object?>();
+        final resource = Object();
+        final discarded = <Object>[];
+        bool current = true;
+        final first = queue.renderResource<Object>(
+          () => native.future,
+          () => current,
+          onDiscard: discarded.add,
+        );
+        if (dispose) {
+          queue.dispose();
+        } else {
+          current = false;
+        }
+        native.complete(resource);
+        expect(await first, isNull);
+        expect(discarded, [same(resource)]);
+        queue.dispose();
+      },
+    );
+  }
+  test('current native resource transfers ownership to the decoder', () async {
+    final queue = PdfRasterQueue();
+    final resource = Object();
+    final discarded = <Object>[];
+    expect(
+      await queue.renderResource<Object>(
+        () async => resource,
+        () => true,
+        onDiscard: discarded.add,
+      ),
+      same(resource),
+    );
+    expect(discarded, isEmpty);
+    queue.dispose();
+    expect(discarded, isEmpty);
+  });
+
   test('prefetch reserves a slot for a newly visible page', () async {
     final queue = PdfRasterQueue();
     addTearDown(queue.dispose);

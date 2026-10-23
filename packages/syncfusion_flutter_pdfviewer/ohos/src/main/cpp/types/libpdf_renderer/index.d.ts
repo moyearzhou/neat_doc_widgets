@@ -17,8 +17,10 @@ interface PdfRenderer {
     width: number,
     height: number,
     scale: number,
-    requestGeneration: number
-  ): Promise<Uint8Array | null>;
+    requestGeneration: number,
+    returnHandle?: boolean
+  ): Promise<Uint8Array | number | null>;
+  releasePixelBuffer(handle: number): void;
 }
 
 declare const pdfRenderer: PdfRenderer;

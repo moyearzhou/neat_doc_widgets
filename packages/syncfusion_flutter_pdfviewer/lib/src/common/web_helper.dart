@@ -1,4 +1,6 @@
 import 'dart:js_interop';
+import 'dart:typed_data';
+
 import 'package:web/web.dart' as web;
 
 /// Checks whether focus node of pdf page view has primary focus.
@@ -49,3 +51,7 @@ String getPlatformType() {
 
 /// In web, pdfium cannot loaded.
 bool isPdfiumLoaded() => false;
+
+Uint8List nativePdfPixels(int handle, int length) =>
+    throw UnsupportedError('Native PDF pixels are unavailable on web');
+void releaseNativePdfPixels(int handle) {}

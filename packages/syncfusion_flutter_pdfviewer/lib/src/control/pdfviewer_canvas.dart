@@ -2728,19 +2728,25 @@ class CanvasRenderBox extends RenderBox {
     bool isMouseSelection, {
     Rect startPoint = Rect.zero,
   }) {
+    // A loaded document resolves pages through its page tree. Read the size
+    // once per selection update, rather than repeating that traversal per line.
+    final Size? pageSize =
+        pdfDocument != null && _textSelectionHelper.viewId != null
+            ? pdfDocument!.pages[_textSelectionHelper.viewId!].size
+            : null;
     for (int i = 0; i < _textSelectionHelper.textLines!.length; i++) {
       final TextLine line = _textSelectionHelper.textLines![i];
       final bool isRTLText = intl.Bidi.detectRtlDirectionality(line.text);
       Rect extendBounds = line.bounds;
       final isRotatedGlyph = line.wordCollection.first.glyphs.first.isRotated;
-      if (pdfDocument != null && _textSelectionHelper.viewId != null) {
+      if (pageSize != null) {
         if (isRotatedGlyph) {
           if (_rotatedAngle == PdfPageRotateAngle.rotateAngle90) {
             extendBounds = Rect.fromLTRB(
               line.bounds.left,
               0,
               line.bounds.right,
-              pdfDocument!.pages[_textSelectionHelper.viewId!].size.height,
+              pageSize.height,
             );
           }
         } else {
@@ -2748,7 +2754,7 @@ class CanvasRenderBox extends RenderBox {
           extendBounds = Rect.fromLTRB(
             0,
             line.bounds.top,
-            pdfDocument!.pages[_textSelectionHelper.viewId!].size.width,
+            pageSize.width,
             line.bounds.bottom,
           );
         }
