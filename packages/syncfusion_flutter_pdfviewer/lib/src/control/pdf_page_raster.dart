@@ -5,6 +5,7 @@ extension _PdfPageRaster on PdfPageViewState {
   void _suspendRasterization() {
     _rasterizationSuspended = true;
     _rasterGeneration++;
+    _updateNativeRenderState(invalidate: true);
     _pendingPageRaster = null;
     _pageTimer?.cancel();
     _pageTimer = null;
@@ -13,6 +14,7 @@ extension _PdfPageRaster on PdfPageViewState {
   /// Allows a final viewport refresh after the gesture ends.
   void _resumeRasterization() {
     _rasterizationSuspended = false;
+    _updateNativeRenderState();
   }
 
   Future<void> _getImage(Size viewportSize, double zoomLevel) async {
@@ -32,6 +34,7 @@ extension _PdfPageRaster on PdfPageViewState {
       }
       _pendingPageRaster = (viewport: viewportSize, zoom: zoomLevel);
       _rasterGeneration++;
+      _updateNativeRenderState(invalidate: true);
       return;
     }
     _calculateHeightPercentage();
@@ -92,12 +95,16 @@ extension _PdfPageRaster on PdfPageViewState {
     _runningPageGeneration = generation;
     final operation = CancelableOperation<Uint8List?>.fromFuture(
       _renderWhenCurrent(
-        () => PdfViewerPlatform.instance.getPage(
-          widget.pageIndex + 1,
-          width,
-          height,
-          widget.documentID,
-        ),
+        () {
+          _nativeRenderRequested = true;
+          return _nativeRenderBridge.getPage(
+            widget.pageIndex + 1,
+            width,
+            height,
+            widget.documentID,
+            visible: _pageVisible,
+          );
+        },
         generation,
       ),
     );
@@ -166,6 +173,29 @@ extension _PdfPageRaster on PdfPageViewState {
         unawaited(_getImage(viewportSize, zoomLevel));
       }
     }
+  }
+
+  void _updateNativeRenderState({bool invalidate = false}) {
+    // A pinch visits every page state. Notify only pages that reached native,
+    // and do not repeatedly invalidate already inactive native work.
+    if (!_nativeRenderRequested) {
+      return;
+    }
+    final bool active = _viewportActive && !_rasterizationSuspended;
+    if (_nativeReportedActive == active &&
+        _nativeReportedVisible == _pageVisible &&
+        (!invalidate || !active)) {
+      return;
+    }
+    _nativeReportedActive = active;
+    _nativeReportedVisible = _pageVisible;
+    unawaited(_nativeRenderBridge.updateState(
+      widget.documentID,
+      widget.pageIndex + 1,
+      active: active,
+      visible: _pageVisible,
+      invalidate: invalidate,
+    ));
   }
 
   Future<Uint8List?> _renderWhenCurrent(

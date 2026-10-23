@@ -29,6 +29,7 @@ import { HashMap } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { LogUtil } from './utils/LogUtil';
 import pdfRenderer from 'libpdf_renderer.so';
+import { PdfiumRenderQueue } from './PdfiumRenderQueue';
 
 const STANDARD_CODEC_UINT8_ARRAY: number = 8;
 
@@ -82,14 +83,8 @@ interface DocumentInfo {
   pdfiumDocumentId?: number;
   pageRequestGeneration: number[];
   tileRequestGeneration: number[];
-}
-
-interface PdfiumRenderTask {
-  execute: () => Promise<Uint8Array | null>;
-  resolve: (value: Uint8Array | null) => void;
-  reject: (reason: Error) => void;
-  queuedAt: number;
-  label: string;
+  pageRenderActive: boolean[];
+  pageRenderPriority: number[];
 }
 
 /** SyncfusionFlutterPdfViewerPlugin  **/
@@ -102,9 +97,12 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
   private pageHeight: number[] = [];
   // Document repository.
   private documentRepo: HashMap<String, DocumentInfo> = new HashMap<String, DocumentInfo>();
-  private foregroundRenderQueue: PdfiumRenderTask[] = [];
-  private thumbnailRenderQueue: PdfiumRenderTask[] = [];
-  private isPdfiumRenderActive: boolean = false;
+  private renderQueue: PdfiumRenderQueue = new PdfiumRenderQueue(
+    (label: string, queueMs: number, foregroundPending: number, thumbnailPending: number): void => {
+      LogUtil.info(`[Syncfusion PDF][arktsDispatch] ${label}, ` +
+        `queueMs=${queueMs}, foregroundPending=${foregroundPending}, ` +
+        `thumbnailPending=${thumbnailPending}`);
+    });
 
   getUniqueClassName(): string {
     return 'SyncfusionFlutterPdfViewerPlugin'
@@ -154,6 +152,9 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       case 'getTileImage':
         // 实现瓦片图像渲染逻辑
         this.getTileImage(call, result);
+        break;
+      case 'updateRenderState':
+        this.updateRenderState(call, result);
         break;
       case 'closeDocument':
         this.closeDocument(call, result);
@@ -258,7 +259,9 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       pdfDocument: pdfDocument,
       pdfiumDocumentId: pdfiumDocumentId,
       pageRequestGeneration: [],
-      tileRequestGeneration: []
+      tileRequestGeneration: [],
+      pageRenderActive: [],
+      pageRenderPriority: []
     });
     LogUtil.info(`Syncfusion PDF renderer initialized: source=${source}, pages=${pageCount}, ` +
       `pdfium=${pdfiumDocumentId !== undefined}`);
@@ -339,10 +342,21 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       }
 
       const pageIndex = index - 1;
+      const requestedPriority: number | undefined = call.argument('renderPriority');
+      const viewportRequest = requestedPriority === 0 || requestedPriority === 1;
+      if (viewportRequest) {
+        docInfo.pageRenderPriority[pageIndex] = requestedPriority as number;
+      }
       const outputWidth = Math.floor(width);
       const outputHeight = Math.floor(height);
       const requestGeneration = (docInfo.pageRequestGeneration[pageIndex] ?? 0) + 1;
       docInfo.pageRequestGeneration[pageIndex] = requestGeneration;
+      const isCurrent = (): boolean =>
+        this.documentRepo.get(documentID) === docInfo &&
+        docInfo.pageRequestGeneration[pageIndex] === requestGeneration &&
+        (!viewportRequest || docInfo.pageRenderActive[pageIndex] !== false);
+      const priority = (): number => viewportRequest ?
+        (docInfo.pageRenderPriority[pageIndex] ?? requestedPriority as number) : (outputBgra ? 0 : 2);
       const startedAt = Date.now();
       LogUtil.info(`[Syncfusion PDF][arktsPageRequest] document=${documentID}, page=${index}, ` +
         `size=${outputWidth}x${outputHeight}, generation=${requestGeneration}`);
@@ -351,8 +365,8 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
         if (docInfo.pdfiumDocumentId === undefined) {
           docInfo.pdfiumDocumentId = pdfRenderer.openDocument(docInfo.filePath);
         }
-        const page = await this.schedulePdfiumRender(
-          () => pdfRenderer.renderPage(
+        const page = await this.renderQueue.render({
+          execute: () => pdfRenderer.renderPage(
             docInfo.pdfiumDocumentId as number,
             pageIndex,
             outputWidth,
@@ -360,10 +374,11 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
             requestGeneration,
             outputBgra
           ),
-          outputBgra,
-          `document=${documentID} page=${index} generation=${requestGeneration} ` +
+          isCurrent: isCurrent,
+          priority: priority,
+          label: `document=${documentID} page=${index} generation=${requestGeneration} ` +
             `size=${outputWidth}x${outputHeight} format=${outputBgra ? 'bgra' : 'rgba'}`
-        );
+        });
         if (page === null) {
           LogUtil.info(`Syncfusion PDF PDFium page superseded: page=${index}, ` +
             `generation=${requestGeneration}, durationMs=${Date.now() - startedAt}`);
@@ -382,6 +397,10 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
         LogUtil.error(`Syncfusion PDF PDFium page failed, using PDF Kit: page=${index}, error=${error}`);
       }
 
+      if (!isCurrent()) {
+        result.success(null);
+        return;
+      }
       const fallbackPage = await this.getPageWithPdfKit(
         docInfo,
         pageIndex,
@@ -434,8 +453,8 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       const startedAt = Date.now();
       LogUtil.info(`Syncfusion PDF PDFium tile request: page=${pageNumber}, width=${Math.floor(width)}, ` +
         `height=${Math.floor(height)}, scale=${scale}, generation=${requestGeneration}`);
-      const tile = await this.schedulePdfiumRender(
-        () => pdfRenderer.renderTile(
+      const tile = await this.renderQueue.render({
+        execute: () => pdfRenderer.renderTile(
           docInfo.pdfiumDocumentId as number,
           pageIndex,
           x,
@@ -445,10 +464,14 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
           scale,
           requestGeneration
         ),
-        true,
-        `document=${documentID} tile page=${pageNumber} generation=${requestGeneration} ` +
+        isCurrent: (): boolean => this.documentRepo.get(documentID) === docInfo &&
+          docInfo.tileRequestGeneration[pageIndex] === requestGeneration &&
+          docInfo.pageRenderActive[pageIndex] !== false &&
+          (docInfo.pageRenderPriority[pageIndex] ?? 0) === 0,
+        priority: (): number => 0,
+        label: `document=${documentID} tile page=${pageNumber} generation=${requestGeneration} ` +
           `size=${Math.floor(width)}x${Math.floor(height)}`
-      );
+      });
       if (tile === null) {
         LogUtil.info(`Syncfusion PDF PDFium tile superseded: page=${pageNumber}, ` +
           `generation=${requestGeneration}, durationMs=${Date.now() - startedAt}`);
@@ -468,50 +491,26 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
     }
   }
 
-  private schedulePdfiumRender(
-    execute: () => Promise<Uint8Array | null>,
-    foreground: boolean,
-    label: string
-  ): Promise<Uint8Array | null> {
-    return new Promise<Uint8Array | null>((resolve, reject) => {
-      const task: PdfiumRenderTask = {
-        execute: execute,
-        resolve: resolve,
-        reject: reject,
-        queuedAt: Date.now(),
-        label: label
-      };
-      if (foreground) {
-        this.foregroundRenderQueue.push(task);
-      } else {
-        this.thumbnailRenderQueue.push(task);
+  private updateRenderState(call: MethodCall, result: MethodResult): void {
+    const documentID: string = call.argument('documentID');
+    const index: number = call.argument('index');
+    const docInfo = this.documentRepo.get(documentID);
+    if (docInfo && index >= 1 && index <= docInfo.pageCount) {
+      const pageIndex = index - 1;
+      const active: boolean = call.argument('active');
+      const visible: boolean = call.argument('visible');
+      const invalidate: boolean = call.argument('invalidate');
+      docInfo.pageRenderActive[pageIndex] = active;
+      docInfo.pageRenderPriority[pageIndex] = visible ? 0 : 1;
+      if (!active || invalidate) {
+        // Invalidate queued base images and tiles before they cross NAPI.
+        // Re-entering the viewport cannot revive an earlier generation.
+        docInfo.pageRequestGeneration[pageIndex] = (docInfo.pageRequestGeneration[pageIndex] ?? 0) + 1;
+        docInfo.tileRequestGeneration[pageIndex] = (docInfo.tileRequestGeneration[pageIndex] ?? 0) + 1;
       }
-      this.drainPdfiumRenderQueue();
-    });
-  }
-
-  private async drainPdfiumRenderQueue(): Promise<void> {
-    if (this.isPdfiumRenderActive) {
-      return;
+      this.renderQueue.refresh();
     }
-    const task = this.foregroundRenderQueue.shift() ?? this.thumbnailRenderQueue.shift();
-    if (!task) {
-      return;
-    }
-
-    this.isPdfiumRenderActive = true;
-    const queueDuration = Date.now() - task.queuedAt;
-    LogUtil.info(`[Syncfusion PDF][arktsDispatch] ${task.label}, ` +
-      `queueMs=${queueDuration}, foregroundPending=${this.foregroundRenderQueue.length}, ` +
-      `thumbnailPending=${this.thumbnailRenderQueue.length}`);
-    try {
-      task.resolve(await task.execute());
-    } catch (error) {
-      task.reject(error as Error);
-    } finally {
-      this.isPdfiumRenderActive = false;
-      this.drainPdfiumRenderQueue();
-    }
+    result.success(null);
   }
 
   // 将 pixelMap 转成图片格式  低版本
@@ -558,6 +557,10 @@ export default class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, 
       if (this.documentRepo.hasKey(documentID)) {
         const docInfo = this.documentRepo.get(documentID);
         if (docInfo && docInfo.filePath) {
+          // Remove queued work before releasing its document. Running native
+          // work still settles normally and its stale result is discarded.
+          this.documentRepo.remove(documentID);
+          this.renderQueue.refresh();
           if (docInfo.pdfiumDocumentId !== undefined) {
             pdfRenderer.closeDocument(docInfo.pdfiumDocumentId);
           }

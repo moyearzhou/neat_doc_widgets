@@ -19,6 +19,7 @@ import '../common/mobile_helper.dart'
 import '../common/pdfviewer_helper.dart';
 import '../form_fields/form_field_container.dart';
 import '../theme/theme.dart';
+import 'pdf_native_render_bridge.dart';
 import 'pdf_page_render_surface.dart';
 import 'pdf_raster_queue.dart';
 import 'pdf_scrollable.dart';
@@ -277,6 +278,10 @@ class PdfPageViewState extends State<PdfPageView> {
   bool _viewportActive = true;
   bool _pageVisible = true;
   bool _baseRasterIsPreview = false;
+  final PdfNativeRenderBridge _nativeRenderBridge = const PdfNativeRenderBridge();
+  bool _nativeRenderRequested = false;
+  bool? _nativeReportedActive;
+  bool? _nativeReportedVisible;
   double? _scheduledPageZoom;
   String? _semanticLabel;
 
@@ -288,14 +293,18 @@ class PdfPageViewState extends State<PdfPageView> {
   /// Invalidates offscreen work without starting another native request.
   void setViewportActive(bool active, {bool visible = true}) {
     final bool wasVisible = _pageVisible;
+    final bool wasActive = _viewportActive;
     _pageVisible = active && visible;
+    _viewportActive = active;
     if (!wasVisible && _pageVisible) {
       widget.rasterQueue?.refreshPriorities();
     }
-    if (_viewportActive == active) {
+    if (wasActive != active || wasVisible != _pageVisible) {
+      _updateNativeRenderState();
+    }
+    if (wasActive == active) {
       return;
     }
-    _viewportActive = active;
     if (!active) {
       _rasterGeneration++;
       _pendingPageRaster = null;
