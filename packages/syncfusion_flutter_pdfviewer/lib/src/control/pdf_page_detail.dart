@@ -1,7 +1,7 @@
 part of 'pdf_page_view.dart';
 
 extension _PdfPageDetail on PdfPageViewState {
-  ({Rect page, Rect visible, double scale})? _detailTarget(
+  ({Rect page, Rect visible, Size viewport, double scale})? _detailTarget(
     TransformationController transform,
     Size viewport,
     double zoom, {
@@ -47,6 +47,10 @@ extension _PdfPageDetail on PdfPageViewState {
     return (
       page: toPage(page),
       visible: toPage(exposed),
+      viewport: Size(
+        viewport.width / zoom * _heightPercentage,
+        viewport.height / zoom * _heightPercentage,
+      ),
       scale: zoom * _dpr / _heightPercentage,
     );
   }
@@ -87,6 +91,7 @@ extension _PdfPageDetail on PdfPageViewState {
       target.page,
       target.visible,
       target.scale,
+      viewportSize: target.viewport,
     );
     final Size size = region.imageSize;
     final int generation = _rasterGeneration;

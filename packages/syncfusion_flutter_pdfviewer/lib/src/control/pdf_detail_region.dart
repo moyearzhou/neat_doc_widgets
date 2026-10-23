@@ -14,9 +14,35 @@ class PdfDetailRegion {
     (bounds.height * pixelScale).ceilToDouble(),
   );
 
-  static PdfDetailRegion plan(Rect page, Rect visible, double pixelScale) {
-    final Rect area = page.intersect(visible);
-    // At most twice the visible area, with at most 16MiB of extra RGBA pixels.
+  static PdfDetailRegion plan(
+    Rect page,
+    Rect visible,
+    double pixelScale, {
+    Size? viewportSize,
+  }) {
+    final Rect exposed = page.intersect(visible);
+    // A page entering the viewport may expose only a few pixels. Plan at
+    // least one viewport-sized window, clamped inside the page, so successive
+    // narrow strips reuse the same patch instead of repeatedly growing it.
+    final double width = math.max(
+      exposed.width,
+      math.min(page.width, viewportSize?.width ?? exposed.width),
+    );
+    final double height = math.max(
+      exposed.height,
+      math.min(page.height, viewportSize?.height ?? exposed.height),
+    );
+    final double left = (exposed.center.dx - width / 2).clamp(
+      page.left,
+      page.right - width,
+    );
+    final double top = (exposed.center.dy - height / 2).clamp(
+      page.top,
+      page.bottom - height,
+    );
+    final Rect area = Rect.fromLTWH(left, top, width, height);
+    // At most twice this viewport window, with at most 16MiB extra RGBA pixels.
+    // The requested density is unchanged; this bounds only speculative pixels.
     final double maxArea = math.min(
       area.width * area.height * 2,
       area.width * area.height + 4 * 1024 * 1024 / (pixelScale * pixelScale),

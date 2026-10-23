@@ -13,8 +13,10 @@ class _Reader {
     this.direction = PdfScrollDirection.vertical,
     this.layout = PdfPageLayoutMode.continuous,
     this.initialZoom = 1,
+    this.pageCount = 1,
   });
 
+  final int pageCount;
   final Size pageSize;
   final PdfScrollDirection direction;
   final PdfPageLayoutMode layout;
@@ -32,7 +34,9 @@ class _Reader {
     addTearDown(tester.view.resetDevicePixelRatio);
     final document = PdfDocument();
     document.pageSettings.size = pageSize;
-    document.pages.add();
+    for (int i = 0; i < pageCount; i++) {
+      document.pages.add();
+    }
     bytes = Uint8List.fromList(document.saveSync());
     document.dispose();
     const channel = MethodChannel('syncfusion_flutter_pdfviewer');
@@ -41,11 +45,11 @@ class _Reader {
     messenger.setMockMethodCallHandler(channel, (call) async {
       switch (call.method) {
         case 'loadPdfFromFile':
-          return '1';
+          return '$pageCount';
         case 'getPagesWidth':
-          return <double>[pageSize.width];
+          return List<double>.filled(pageCount, pageSize.width);
         case 'getPagesHeight':
-          return <double>[pageSize.height];
+          return List<double>.filled(pageCount, pageSize.height);
         case 'getPage':
           return pixels(call.arguments as Map);
         case 'getTileImage':
@@ -81,10 +85,10 @@ class _Reader {
       );
       await tester.pump();
     }
-    expect(controller.pageCount, 1);
+    expect(controller.pageCount, pageCount);
     await settle(tester);
     expect(tiles, isNotEmpty, reason: 'Exercise real viewer detail scheduling');
-    expect(images(tester), hasLength(2));
+    expect(images(tester).length, greaterThanOrEqualTo(2));
   }
 
   static Uint8List pixels(Map<dynamic, dynamic> args) => Uint8List(
@@ -124,6 +128,37 @@ class _Reader {
 }
 
 void main() {
+  testWidgets(
+    'nearby page prewarm survives gradual entry without growing strips',
+    (tester) async {
+      final reader = _Reader(pageCount: 2);
+      await reader.mount(tester);
+      // Pages fit to 800 logical pixels wide, so each tall page is 3200 high.
+      final page = tester
+          .widgetList<PdfPageView>(find.byType(PdfPageView))
+          .firstWhere((page) => page.pageIndex == 1);
+      final origin = page.pdfPages[2]!.pageOffset;
+      // Page 2 is still outside the viewport, just inside the half-screen prewarm.
+      reader.controller.jumpTo(yOffset: origin - 880);
+      await reader.settle(tester);
+      List<Map<dynamic, dynamic>> secondTiles() =>
+          reader.tiles.where((args) => args['pageNumber'] == 2).toList();
+      expect(secondTiles(), hasLength(1));
+      final first = secondTiles().single;
+      expect((first['height'] as num).toDouble(), greaterThanOrEqualTo(1200));
+      for (final distance in [700.0, 590.0, 450.0, 300.0, 50.0, 0.0]) {
+        reader.controller.jumpTo(yOffset: origin - distance);
+        await reader.settle(tester);
+      }
+      expect(
+        secondTiles(),
+        hasLength(1),
+        reason: 'Prewarm and visible entry must reuse the same high-DPI window',
+      );
+      await reader.dispose(tester);
+    },
+  );
+
   testWidgets('single-page zooming refreshes detail while retaining pixels', (
     tester,
   ) async {

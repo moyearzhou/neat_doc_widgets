@@ -7,6 +7,48 @@ void main() {
   const page = Rect.fromLTWH(0, 0, 600, 2400);
   const visible = Rect.fromLTWH(0, 600, 600, 300);
 
+  test('entering page strips reuse a viewport-sized patch at either edge', () {
+    for (final reverse in [false, true]) {
+      Rect strip(double length) => Rect.fromLTWH(
+        0,
+        reverse ? page.bottom - length : 0,
+        page.width,
+        length,
+      );
+      final region = PdfDetailRegion.plan(
+        page,
+        strip(1),
+        3,
+        viewportSize: const Size(600, 300),
+      );
+      expect(region.bounds.height, greaterThanOrEqualTo(300));
+      for (final length in [21.0, 57.0, 145.0, 280.0, 300.0]) {
+        expect(region.covers(page, strip(length), 3), isTrue);
+      }
+      expect(region.pixelScale, 3);
+    }
+  });
+
+  test('horizontal page entry also uses a bounded stable viewport window', () {
+    const wide = Rect.fromLTWH(0, 0, 2400, 600);
+    final region = PdfDetailRegion.plan(
+      wide,
+      const Rect.fromLTWH(0, 0, 1, 600),
+      8,
+      viewportSize: const Size(300, 600),
+    );
+    expect(region.covers(wide, const Rect.fromLTWH(0, 0, 300, 600), 8), isTrue);
+    const coreArea = 300 * 600;
+    expect(
+      (region.bounds.width * region.bounds.height - coreArea) * 8 * 8 * 4,
+      lessThanOrEqualTo(16 * 1024 * 1024 + 1),
+    );
+    expect(
+      region.bounds.width * region.bounds.height,
+      lessThanOrEqualTo(coreArea * 2),
+    );
+  });
+
   test('detail overscan covers a same-page scroll before new pixels enter', () {
     final region = PdfDetailRegion.plan(page, visible, 3);
     expect(region.bounds.top, lessThan(visible.top));
