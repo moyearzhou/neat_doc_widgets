@@ -1250,7 +1250,11 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   double? _otherContextHeight;
   double _maxPdfPageWidth = 0.0;
   final double _minScale = 1;
-  bool _isScaleEnabled = !kUsesPointerAwarePdfScaling;
+  // Pointer input changes only the interactive surface. Rebuilding this state
+  // would regenerate every page at touch move/up, including during a fling.
+  // Both page layouts keep their existing document children below the gate.
+  final ValueNotifier<bool> _pointerScaleEnabled =
+      ValueNotifier<bool>(!kUsesPointerAwarePdfScaling);
   bool _isPdfPageTapped = false;
   bool _isDocumentLoadInitiated = false;
   Orientation? _deviceOrientation;
@@ -1659,6 +1663,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _hideStickyNoteDialog();
     _transformationController.removeListener(_updateScrollOffset);
     _transformationController.dispose();
+    _pointerScaleEnabled.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -3988,53 +3993,56 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                   _pageController = PageController(
                     initialPage: _pdfViewerController._pageNumber - 1,
                   );
-                  pdfContainer = MouseRegion(
-                    cursor: _cursor,
-                    onHover: (PointerHoverEvent details) {
-                      if (widget.interactionMode == PdfInteractionMode.pan &&
-                          _cursor != SystemMouseCursors.grab) {
-                        setState(() {
-                          _cursor = SystemMouseCursors.grab;
-                        });
-                      } else if (widget.interactionMode ==
-                              PdfInteractionMode.selection &&
-                          _cursor != SystemMouseCursors.basic) {
-                        setState(() {
-                          _cursor = SystemMouseCursors.basic;
-                        });
-                      }
-                    },
-                    child: SinglePageView(
-                      _singlePageViewKey,
-                      _pdfViewerController,
-                      _transformationController,
-                      _pageController,
-                      _handleSinglePageViewPageChanged,
-                      _interactionUpdate,
-                      viewportDimension,
-                      visibleViewportDimension,
-                      widget.maxZoomLevel,
-                      widget.canShowPaginationDialog,
-                      widget.canShowScrollHead,
-                      widget.canShowScrollStatus,
-                      _pdfPages,
-                      _isMobileView,
-                      widget.enableDoubleTapZooming,
-                      widget.interactionMode,
-                      _isScaleEnabled,
-                      _handleSinglePageViewZoomLevelChanged,
-                      _handleDoubleTap,
-                      _handlePdfOffsetChanged,
-                      isBookmarkViewOpen,
-                      _textDirection!,
-                      _isTablet,
-                      _scrollDirection,
-                      _getTileImage,
-                      children,
-                      onScaleGestureChanged: _handleTouchScaleChanged,
-                      scrollbarSettings: widget.scrollbarSettings,
-                      scrollThumbBuilder: widget.scrollThumbBuilder,
-                    ),
+                  pdfContainer = ValueListenableBuilder<bool>(
+                    valueListenable: _pointerScaleEnabled,
+                    builder: (BuildContext context, bool scaleEnabled, Widget? _) =>
+                        MouseRegion(
+                          cursor: _cursor,
+                          onHover: (PointerHoverEvent details) {
+                            if (widget.interactionMode == PdfInteractionMode.pan &&
+                                _cursor != SystemMouseCursors.grab) {
+                              setState(() {
+                                _cursor = SystemMouseCursors.grab;
+                              });
+                            } else if (widget.interactionMode == PdfInteractionMode.selection &&
+                                _cursor != SystemMouseCursors.basic) {
+                              setState(() {
+                                _cursor = SystemMouseCursors.basic;
+                              });
+                            }
+                          },
+                          child: SinglePageView(
+                            _singlePageViewKey,
+                            _pdfViewerController,
+                            _transformationController,
+                            _pageController,
+                            _handleSinglePageViewPageChanged,
+                            _interactionUpdate,
+                            viewportDimension,
+                            visibleViewportDimension,
+                            widget.maxZoomLevel,
+                            widget.canShowPaginationDialog,
+                            widget.canShowScrollHead,
+                            widget.canShowScrollStatus,
+                            _pdfPages,
+                            _isMobileView,
+                            widget.enableDoubleTapZooming,
+                            widget.interactionMode,
+                            scaleEnabled,
+                            _handleSinglePageViewZoomLevelChanged,
+                            _handleDoubleTap,
+                            _handlePdfOffsetChanged,
+                            isBookmarkViewOpen,
+                            _textDirection!,
+                            _isTablet,
+                            _scrollDirection,
+                            _getTileImage,
+                            children,
+                            onScaleGestureChanged: _handleTouchScaleChanged,
+                            scrollbarSettings: widget.scrollbarSettings,
+                            scrollThumbBuilder: widget.scrollThumbBuilder,
+                          ),
+                        ),
                   );
                   if (_isSinglePageViewPageChanged &&
                       _renderedImages.contains(
@@ -4098,38 +4106,42 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                       child: child,
                     ),
                   );
-                  pdfContainer = PdfScrollable(
-                    _transformationController,
-                    widget.canShowPaginationDialog,
-                    widget.canShowScrollStatus,
-                    widget.canShowScrollHead,
-                    _pdfViewerController,
-                    _isMobileView,
-                    _pdfDimension,
-                    _totalImageSize,
-                    viewportDimension,
-                    visibleViewportDimension,
-                    _handlePdfOffsetChanged,
-                    _panEnabled,
-                    widget.maxZoomLevel,
-                    _minScale,
-                    widget.enableDoubleTapZooming,
-                    widget.interactionMode,
-                    widget.pageSpacing,
-                    _maxPdfPageWidth,
-                    _isScaleEnabled,
-                    _maxScrollExtent,
-                    _pdfPages,
-                    _scrollDirection,
-                    isBookmarkViewOpen,
-                    _textDirection!,
-                    child,
-                    _getTileImage,
-                    key: _pdfScrollableStateKey,
-                    onDoubleTap: _handleDoubleTap,
-                    onScaleGestureChanged: _handleTouchScaleChanged,
-                    scrollbarSettings: widget.scrollbarSettings,
-                    scrollThumbBuilder: widget.scrollThumbBuilder,
+                  pdfContainer = ValueListenableBuilder<bool>(
+                    valueListenable: _pointerScaleEnabled,
+                    builder: (BuildContext context, bool scaleEnabled, Widget? _) =>
+                        PdfScrollable(
+                          _transformationController,
+                          widget.canShowPaginationDialog,
+                          widget.canShowScrollStatus,
+                          widget.canShowScrollHead,
+                          _pdfViewerController,
+                          _isMobileView,
+                          _pdfDimension,
+                          _totalImageSize,
+                          viewportDimension,
+                          visibleViewportDimension,
+                          _handlePdfOffsetChanged,
+                          _panEnabled,
+                          widget.maxZoomLevel,
+                          _minScale,
+                          widget.enableDoubleTapZooming,
+                          widget.interactionMode,
+                          widget.pageSpacing,
+                          _maxPdfPageWidth,
+                          scaleEnabled,
+                          _maxScrollExtent,
+                          _pdfPages,
+                          _scrollDirection,
+                          isBookmarkViewOpen,
+                          _textDirection!,
+                          child,
+                          _getTileImage,
+                          key: _pdfScrollableStateKey,
+                          onDoubleTap: _handleDoubleTap,
+                          onScaleGestureChanged: _handleTouchScaleChanged,
+                          scrollbarSettings: widget.scrollbarSettings,
+                          scrollThumbBuilder: widget.scrollThumbBuilder,
+                        ),
                   );
                   // Updates current offset when scrollDirection change occurs.
                   if (_isScrollDirectionChange) {
@@ -4358,22 +4370,14 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   void _handlePdfPagePointerMove(PointerMoveEvent details) {
     if (details.kind == PointerDeviceKind.touch &&
         kUsesPointerAwarePdfScaling) {
-      if (!_isScaleEnabled) {
-        setState(() {
-          _isScaleEnabled = true;
-        });
-      }
+      _pointerScaleEnabled.value = true;
     }
   }
 
   void _handlePdfPagePointerUp(PointerUpEvent details) {
     if (details.kind == PointerDeviceKind.touch &&
         kUsesPointerAwarePdfScaling) {
-      if (_isScaleEnabled) {
-        setState(() {
-          _isScaleEnabled = false;
-        });
-      }
+      _pointerScaleEnabled.value = false;
     }
   }
 
@@ -4463,12 +4467,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         });
       }
     }
-    if (!_isScaleEnabled &&
+    if (!_pointerScaleEnabled.value &&
         event.kind == PointerDeviceKind.touch &&
         (!kIsDesktop)) {
-      setState(() {
-        _isScaleEnabled = true;
-      });
+      _pointerScaleEnabled.value = true;
     }
     if (!_canInvokeOnTap) {
       _pdfPagesKey[_pdfViewerController.pageNumber]
