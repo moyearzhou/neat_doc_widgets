@@ -49,6 +49,7 @@ import 'form_fields/pdf_list_box.dart';
 import 'form_fields/pdf_radio_button.dart';
 import 'form_fields/pdf_signature.dart';
 import 'form_fields/pdf_text_box.dart';
+import 'text_extraction/hover_text_loader.dart';
 import 'text_extraction/text_extraction.dart';
 import 'text_extraction/visible_page_text_loader.dart';
 import 'theme/theme.dart';
@@ -1301,6 +1302,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   final List<int> _renderedImages = <int>[];
   VisiblePageTextLoader? _visiblePageText;
   PageTextWorker? _pageTextWorker;
+  HoverTextLoader? _hoverText;
   Size _totalImageSize = Size.zero;
   late PdfScrollDirection _scrollDirection;
   late PdfScrollDirection _tempScrollDirection;
@@ -3858,6 +3860,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                         _onStickyNoteAnnotationDoubleTapped,
                         pageRenderColorFilter: widget.pageRenderColorFilter,
                         rasterQueue: _rasterQueue,
+                        hoverTextLoader: _ensureHoverTextLoader(),
                       );
                       // A page's spinner, raster or annotation update must not
                       // repaint the other pages in the continuous Column/Row.
@@ -6660,6 +6663,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 
   /// Updates the [PdfViewerController.scrollOffset] API
   void _updateScrollOffset() {
+    _hoverText?.viewportChanged();
     Offset offset = _transformationController.toScene(Offset.zero);
     if (widget.pageLayoutMode == PdfPageLayoutMode.continuous) {
       offset = Offset(

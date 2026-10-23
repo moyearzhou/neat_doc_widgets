@@ -18,6 +18,7 @@ import '../common/mobile_helper.dart'
     as helper;
 import '../common/pdfviewer_helper.dart';
 import '../form_fields/form_field_container.dart';
+import '../text_extraction/hover_text_loader.dart';
 import '../theme/theme.dart';
 import 'pdf_page_render_surface.dart';
 import 'pdf_raster_queue.dart';
@@ -26,6 +27,7 @@ import 'pdfviewer_canvas.dart';
 import 'single_page_view.dart';
 
 part 'pdf_page_raster.dart';
+part 'pdf_page_hover.dart';
 
 /// Wrapper class of [Image] widget which shows the PDF pages as an image
 class PdfPageView extends StatefulWidget {
@@ -79,10 +81,14 @@ class PdfPageView extends StatefulWidget {
     this.onStickyNoteDoubleTapped, {
     this.pageRenderColorFilter,
     this.rasterQueue,
+    this.hoverTextLoader,
   }) : super(key: key);
 
   /// Shared native rendering budget for this viewer.
   final PdfRasterQueue? rasterQueue;
+
+  /// Shared, bounded background preparation for desktop text cursors.
+  final HoverTextLoader? hoverTextLoader;
 
   /// Reading transformation shared by the base raster, zoom tiles and paper.
   final ColorFilter? pageRenderColorFilter;
@@ -240,6 +246,13 @@ class PdfPageViewState extends State<PdfPageView> {
 
   /// Mouse cursor for mouse region widget
   SystemMouseCursor _cursor = SystemMouseCursors.basic;
+  Offset? _hoverPosition;
+
+  void _setHoverCursor(SystemMouseCursor cursor) {
+    if (mounted && _cursor != cursor) {
+      setState(() => _cursor = cursor);
+    }
+  }
 
   /// focus node of pdf page view.
   FocusNode focusNode = FocusNode();
@@ -365,6 +378,12 @@ class PdfPageViewState extends State<PdfPageView> {
   @override
   void didUpdateWidget(PdfPageView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.pdfDocument != widget.pdfDocument ||
+        oldWidget.pageIndex != widget.pageIndex ||
+        oldWidget.hoverTextLoader != widget.hoverTextLoader) {
+      oldWidget.hoverTextLoader?.leave(oldWidget.pageIndex);
+      _hoverPosition = null;
+    }
     if (oldWidget.semanticLabel != widget.semanticLabel) {
       _semanticLabel = widget.semanticLabel;
     }
@@ -383,6 +402,7 @@ class PdfPageViewState extends State<PdfPageView> {
 
   @override
   void dispose() {
+    _clearHover();
     clearPageImage(dispose: true);
     focusNode.dispose();
     _pdfViewerThemeData = null;
@@ -514,6 +534,7 @@ class PdfPageViewState extends State<PdfPageView> {
                     canvasRenderBox?.updateContextMenuPosition();
                   },
                   onPointerDown: (PointerDownEvent details) {
+                    _clearHover();
                     _numberOfActivePointers++;
                     widget.onPdfPagePointerDown(details);
                     if (kIsDesktop && !widget.isMobileWebView) {
@@ -685,54 +706,11 @@ class PdfPageViewState extends State<PdfPageView> {
                     },
                     child: MouseRegion(
                       cursor: _cursor,
-                      onHover: (PointerHoverEvent details) {
-                        setState(() {
-                          if (canvasRenderBox != null &&
-                              widget.pdfPages.isNotEmpty) {
-                            final Offset localPosition =
-                                _globalToLocal(details.position) ??
-                                details.localPosition;
-                            final Annotation? annotation = canvasRenderBox!
-                                .findAnnotation(
-                                  localPosition,
-                                  widget.pageIndex + 1,
-                                );
-                            if (_interactionMode ==
-                                PdfInteractionMode.selection) {
-                              final bool isText =
-                                  canvasRenderBox!.findTextWhileHover(
-                                    localPosition,
-                                  ) !=
-                                  null;
-                              final bool isTOC = canvasRenderBox!.findTOC(
-                                localPosition,
-                              );
-                              if (isTOC) {
-                                _cursor = SystemMouseCursors.click;
-                              } else if (isText &&
-                                  !isTOC &&
-                                  annotation == null) {
-                                if (_isRotatedTo90or270) {
-                                  _cursor = SystemMouseCursors.verticalText;
-                                } else {
-                                  _cursor = SystemMouseCursors.text;
-                                }
-                              } else {
-                                _cursor = SystemMouseCursors.basic;
-                              }
-                            } else {
-                              final bool isTOC = canvasRenderBox!.findTOC(
-                                localPosition,
-                              );
-                              if (isTOC) {
-                                _cursor = SystemMouseCursors.click;
-                              } else if (_cursor != SystemMouseCursors.grab) {
-                                _cursor = SystemMouseCursors.grab;
-                              }
-                            }
-                          }
-                        });
-                      },
+                      onEnter:
+                          (PointerEnterEvent details) =>
+                              _handleHoverPosition(details.position),
+                      onHover: _handleHover,
+                      onExit: (_) => _clearHover(),
                       child: canvasContainer,
                     ),
                   ),

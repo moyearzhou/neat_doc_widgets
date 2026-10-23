@@ -2008,38 +2008,6 @@ class CanvasRenderBox extends RenderBox {
     _textSelectionHelper.heightPercentage = null;
   }
 
-  /// Find the text while hover by mouse.
-  TextLine? findTextWhileHover(Offset details) {
-    if (pdfDocument != null) {
-      if (_textSelectionHelper.cursorTextLines == null ||
-          _textSelectionHelper.cursorPageNumber != pageIndex) {
-        _textSelectionHelper.cursorPageNumber = pageIndex;
-        _textSelectionHelper.cursorTextLines = PdfTextExtractor(
-          pdfDocument!,
-        ).extractTextLines(startPageIndex: pageIndex);
-      }
-      final double heightPercentage =
-          pdfDocument!
-              .pages[_textSelectionHelper.cursorPageNumber!]
-              .size
-              .height /
-          height;
-      if (_textSelectionHelper.cursorTextLines != null) {
-        for (
-          int textLineIndex = 0;
-          textLineIndex < _textSelectionHelper.cursorTextLines!.length;
-          textLineIndex++
-        ) {
-          if (_textSelectionHelper.cursorTextLines![textLineIndex].bounds
-              .contains(details * heightPercentage)) {
-            return _textSelectionHelper.cursorTextLines![textLineIndex];
-          }
-        }
-      }
-    }
-    return null;
-  }
-
   /// Find the TOC bounds while hover by mouse.
   bool findTOC(Offset localPosition) {
     if (_textSelectionHelper.cursorPageNumber != pageIndex) {
