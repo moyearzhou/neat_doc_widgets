@@ -11,6 +11,73 @@ import 'package:syncfusion_flutter_pdfviewer/src/control/desktop_scrollbar.dart'
 import 'package:syncfusion_flutter_pdfviewer/src/control/scroll_head.dart';
 
 void main() {
+  for (final axis in Axis.values) {
+    testWidgets(
+      'desktop $axis thumb keeps its viewport under loose constraints',
+      (tester) async {
+        final controller = TransformationController();
+        final vertical = axis == Axis.vertical;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Center(
+              child: SizedBox(
+                width: 300,
+                height: 240,
+                // The viewer overlays its scrollbar as a non-positioned child.
+                // Only one overflowing axis leaves a zero-size placeholder on
+                // the other axis, which must not collapse the scrollbar Stack.
+                child: Stack(
+                  children: [
+                    const Positioned.fill(child: SizedBox()),
+                    DesktopScrollbar(
+                      controller: controller,
+                      viewportSize: const Size(300, 240),
+                      contentSize:
+                          vertical
+                              ? const Size(300, 2000)
+                              : const Size(2000, 240),
+                      settings: const PdfScrollbarSettings(autoHide: false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        final overlay = find.byType(DesktopScrollbar);
+        expect(tester.getSize(overlay), const Size(300, 240));
+        final bar = find.byKey(
+          ValueKey(vertical ? 'vertical_scrollbar' : 'horizontal_scrollbar'),
+        );
+        final viewport = tester.getRect(overlay);
+        final thumb = tester.getRect(bar);
+        expect(thumb.left, greaterThanOrEqualTo(viewport.left));
+        expect(thumb.top, greaterThanOrEqualTo(viewport.top));
+        expect(thumb.right, lessThanOrEqualTo(viewport.right));
+        expect(thumb.bottom, lessThanOrEqualTo(viewport.bottom));
+        await tester.drag(
+          bar,
+          vertical ? const Offset(0, 1000) : const Offset(1000, 0),
+        );
+        await tester.pump();
+        final offset = controller.toScene(Offset.zero);
+        expect(
+          vertical ? offset.dy : offset.dx,
+          closeTo(vertical ? 1760 : 1700, .001),
+        );
+        await tester.drag(
+          bar,
+          vertical ? const Offset(0, -1000) : const Offset(-1000, 0),
+        );
+        await tester.pump();
+        expect(controller.toScene(Offset.zero), Offset.zero);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+      },
+    );
+  }
+
   testWidgets('desktop custom geometry drags both axes to zoomed bounds', (
     tester,
   ) async {
