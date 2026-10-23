@@ -1353,6 +1353,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   Size _viewportSize = Size.zero;
   bool _isTextDirectionChanged = false;
   Timer? _tileTimer;
+  int _viewportResizeGeneration = 0;
   late TransformationControllerExt _transformationController;
 
   /// PdfViewer theme data.
@@ -3716,6 +3717,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                       : const Color(0xFF303030)),
               child: LayoutBuilder(
                 builder: (BuildContext context, BoxConstraints constraints) {
+                  _preserveReadingPosition(constraints.biggest);
                   _viewportConstraints = constraints;
                   if (_viewportSize != _viewportConstraints.biggest) {
                     _viewportSize = _viewportConstraints.biggest;
@@ -3908,11 +3910,6 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                         totalHeight += calculatedSize.width + pageSpacing;
                       }
                       _updateScrollDirectionChange(
-                        _offsetBeforeOrientationChange,
-                        pageIndex,
-                        totalHeight,
-                      );
-                      _updateOffsetOnOrientationChange(
                         _offsetBeforeOrientationChange,
                         pageIndex,
                         totalHeight,
@@ -4136,8 +4133,6 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                           : _getEmptyContainer()
                     : _getEmptyLinearProgressView()));
   }
-
-  void _checkVisiblePages() => _refreshVisiblePages();
 
   bool _isPageVisible(int currentPageNumber) {
     if (_pdfPages.isEmpty) {
@@ -4600,44 +4595,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   Future<void> _getTileImage() async {
-    // Native trackpad updates transform the cached bitmap until release.
-    if (_isTouchScaling || (_trackpadSession != null && _trackpadDidScale)) {
-      return;
-    }
-    if (kIsWeb || !Platform.environment.containsKey('FLUTTER_TEST')) {
-      if (_tileTimer != null && _tileTimer!.isActive) {
-        _tileTimer?.cancel();
-        _tileTimer = null;
-      }
-      _checkVisiblePages();
-      _tileTimer ??= Timer(Durations.medium4, () async {
-        if (_isTouchScaling ||
-            (_trackpadSession != null && _trackpadDidScale) || !mounted) {
-          _tileTimer = null;
-          return;
-        }
-        _checkVisiblePages();
-        final double zoomLevel = _transformationController.value[0];
-        if (_pageLayoutMode == PdfPageLayoutMode.continuous) {
-          for (final int pageNumber in _renderedImages) {
-            _pdfPagesKey[pageNumber]?.currentState?.getTileImage(
-              _transformationController,
-              _viewportSize,
-              zoomLevel,
-            );
-          }
-        } else {
-          _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState
-              ?.getTileImage(
-                _transformationController,
-                _viewportSize,
-                zoomLevel,
-              );
-        }
-        _checkMount();
-        _tileTimer = null;
-      });
-    }
+    _schedulePageRefresh();
+    _scheduleDetailRefresh();
   }
 
   // Checks whether the current Widget is mounted and then relayout the Widget.
@@ -4702,92 +4661,6 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
             _pdfViewerController.pageNumber,
             lookForFirst: isNext,
           );
-    }
-  }
-
-  /// Whenever orientation is changed, PDF page is changed based on viewport
-  /// dimension so offset must be restored to avoid reading continuity loss.
-  void _updateOffsetOnOrientationChange(
-    Offset initialOffset,
-    int pageIndex,
-    double totalHeight,
-  ) {
-    if (_viewportWidth != _viewportConstraints.maxWidth &&
-        _deviceOrientation != MediaQuery.of(context).orientation) {
-      WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
-        _checkMount();
-      });
-      if (pageIndex == 1 &&
-          !_viewportConstraints.biggest.isEmpty &&
-          _pdfScrollableStateKey.currentState != null) {
-        _offsetBeforeOrientationChange = Offset(
-          _pdfScrollableStateKey.currentState!.currentOffset.dx /
-              _pdfDimension.width,
-          _pdfScrollableStateKey.currentState!.currentOffset.dy /
-              _pdfDimension.height,
-        );
-        if (_pdfViewerController.pageCount == 1 &&
-            _pdfScrollableStateKey.currentState != null) {
-          if (_viewportWidth != 0) {
-            final double targetOffset = initialOffset.dy * totalHeight;
-            WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
-              _pdfPagesKey[_pdfViewerController.pageNumber]
-                  ?.currentState
-                  ?.canvasRenderBox
-                  ?.updateContextMenuPosition();
-              _pdfScrollableStateKey.currentState?.forcePixels(
-                Offset(
-                  initialOffset.dx * _viewportConstraints.biggest.width,
-                  targetOffset,
-                ),
-              );
-            });
-          }
-          _viewportWidth = _viewportConstraints.maxWidth;
-
-          /// Updates the orientation of device.
-          _deviceOrientation = MediaQuery.of(context).orientation;
-        }
-      } else if (pageIndex == _pdfViewerController.pageCount) {
-        if (_viewportWidth != 0) {
-          double targetOffset;
-          if (_scrollDirection == PdfScrollDirection.vertical &&
-              widget.pageLayoutMode != PdfPageLayoutMode.single) {
-            targetOffset = initialOffset.dy * totalHeight;
-          } else {
-            targetOffset = initialOffset.dx * totalHeight;
-          }
-          WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
-            _pdfPagesKey[_pdfViewerController.pageNumber]
-                ?.currentState
-                ?.canvasRenderBox
-                ?.updateContextMenuPosition();
-            if (_scrollDirection == PdfScrollDirection.vertical &&
-                widget.pageLayoutMode != PdfPageLayoutMode.single) {
-              _pdfScrollableStateKey.currentState?.forcePixels(
-                Offset(
-                  initialOffset.dx * _viewportConstraints.biggest.width,
-                  targetOffset,
-                ),
-              );
-            } else {
-              _pdfScrollableStateKey.currentState?.forcePixels(
-                Offset(
-                  targetOffset,
-                  initialOffset.dy *
-                      _pdfPages[_pdfViewerController.pageNumber]!
-                          .pageSize
-                          .height,
-                ),
-              );
-            }
-          });
-        }
-        _viewportWidth = _viewportConstraints.maxWidth;
-
-        /// Updates the orientation of device.
-        _deviceOrientation = MediaQuery.of(context).orientation;
-      }
     }
   }
 
@@ -6680,6 +6553,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _pdfViewerController._scrollPositionY = offset.dy;
     _pdfViewerController._notifyViewportChanged();
     _schedulePageRefresh();
+    _scheduleDetailRefresh();
   }
 
   /// Extracts and stores the width and height of each page from the PDF document.

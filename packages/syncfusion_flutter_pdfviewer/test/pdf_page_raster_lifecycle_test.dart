@@ -215,13 +215,20 @@ void main() {
       messenger.setMockMethodCallHandler(channel, (call) async {
         switch (call.method) {
           case 'loadPdfFromFile':
-            return '1';
+            return '2';
           case 'getPagesWidth':
-            return [600.0];
+            return [600.0, 600.0];
           case 'getPagesHeight':
-            return [900.0];
+            return [900.0, 900.0];
           case 'getPage':
             final args = call.arguments as Map;
+            if (args['index'] == 1) {
+              return Uint8List(
+                (args['width'] as num).toInt() *
+                    (args['height'] as num).toInt() *
+                    4,
+              );
+            }
             dimensions.add(
               Size(
                 (args['width'] as num).toDouble(),
@@ -239,6 +246,7 @@ void main() {
       final document = PdfDocument();
       document.pageSettings.size = const Size(600, 900);
       document.pages.add();
+      document.pages.add();
       final bytes = Uint8List.fromList(document.saveSync());
       document.dispose();
       final controller = PdfViewerController();
@@ -247,7 +255,7 @@ void main() {
           home: MediaQuery(
             data: const MediaQueryData(
               size: Size(800, 600),
-              devicePixelRatio: 4,
+              devicePixelRatio: 2,
             ),
             child: SfPdfViewer.memory(
               bytes,
@@ -264,8 +272,15 @@ void main() {
         );
         await tester.pump();
       }
-      expect(controller.pageCount, 1);
-      final page = tester.state<PdfPageViewState>(find.byType(PdfPageView));
+      expect(controller.pageCount, 2);
+      // Exercise a real offscreen neighbor so the viewer's detail scheduler
+      // does not override the visibility changes below.
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      final pageFinder = find.byWidgetPredicate(
+        (widget) => widget is PdfPageView && widget.pageIndex == 1,
+      );
+      final page = tester.state<PdfPageViewState>(pageFinder);
       page.getPageImage(const Size(800, 600), 1);
       await tester.pump();
       expect(requests, hasLength(1));
@@ -298,7 +313,7 @@ void main() {
         reason: 'Only the newest viewport is rendered after return',
       );
       expect(
-        find.byType(RawImage),
+        find.descendant(of: pageFinder, matching: find.byType(RawImage)),
         findsNothing,
         reason: 'The invalid stale buffer must never be decoded or installed',
       );

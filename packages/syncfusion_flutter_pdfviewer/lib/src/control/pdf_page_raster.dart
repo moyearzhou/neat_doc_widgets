@@ -6,6 +6,7 @@ extension _PdfPageRaster on PdfPageViewState {
     _rasterizationSuspended = true;
     _rasterGeneration++;
     _pendingPageRaster = null;
+    _pendingDetail = null;
     _pageTimer?.cancel();
     _pageTimer = null;
   }
@@ -38,32 +39,29 @@ extension _PdfPageRaster on PdfPageViewState {
     final double ratio = 1 / _heightPercentage;
     final double imageFactor = ratio * zoomLevel;
     if (_previousImageFactor == imageFactor &&
+        _baseRasterDpr == _dpr &&
         (!_baseRasterIsPreview || !_pageVisible)) {
       return;
     }
-    _isTile =
-        ratio < 0.5 ||
-        zoomLevel > 1.75 ||
-        (!kIsDesktop && imageFactor > 2) ||
-        (kIsDesktop && imageFactor > 4);
+    int width = (widget.width * zoomLevel * _dpr).ceil();
+    int height = (widget.height * zoomLevel * _dpr).ceil();
+    // Choose by actual output pixels, not desktop/mobile identity. A small
+    // viewport can retain a full-DPI page; a large one gets a bounded base
+    // plus high-DPI detail patches.
+    _isTile = width * height * 4 > 16 * 1024 * 1024;
     if (_isTile && _pdfPage != null) {
       _previousImageFactor = imageFactor;
+      _baseRasterDpr = _dpr;
       return;
     }
-    final Size originalSize = widget.pdfDocument!.pages[widget.pageIndex].size;
-    int width;
-    int height;
     if (_isTile) {
-      final Size size =
-          originalSize.width * originalSize.height * 4 <= 5 * 1024 * 1024
-              ? originalSize
-              : Size(widget.width, widget.height);
-      width = size.width.toInt();
-      height = size.height.toInt();
-    } else {
-      _tileImageCache = null;
-      width = (widget.width * zoomLevel * _dpr).toInt();
-      height = (widget.height * zoomLevel * _dpr).toInt();
+      // The base is a fallback, not a second full-DPI copy of the detail image.
+      final double scale = math.min(
+        1,
+        math.sqrt(4 * 1024 * 1024 / (width * height * 4)),
+      );
+      width = math.max(1, (width * scale).floor());
+      height = math.max(1, (height * scale).floor());
     }
     final bool preview = !_pageVisible;
     if (preview) {
@@ -72,8 +70,8 @@ extension _PdfPageRaster on PdfPageViewState {
       width = math.max(1, (width * scale).floor());
       height = math.max(1, (height * scale).floor());
     }
-    // Cap one base bitmap at 16MiB. Tile rendering restores viewport detail
-    // after settling instead of allocating a huge full-page image at high DPI.
+    // Cap even unusually tall neighbor previews at 16MiB. Detail rendering
+    // restores viewport density without a huge full-page allocation.
     final double reduction = math.min(
       1,
       math.sqrt(16 * 1024 * 1024 / (width * height * 4)),
@@ -120,6 +118,7 @@ extension _PdfPageRaster on PdfPageViewState {
         return;
       }
       _baseRasterIsPreview = preview;
+      _baseRasterDpr = _dpr;
       _replacePageRaster(image, imageFactor);
     } catch (_) {
       // Keep the previous bitmap if a native request or pixel decode fails.
@@ -145,6 +144,22 @@ extension _PdfPageRaster on PdfPageViewState {
           _baseRasterIsPreview) {
         // A neighbor can enter the viewport while its preview is rendering.
         unawaited(_getImage(viewportSize, zoomLevel));
+      } else {
+        final detail = _pendingDetail;
+        _pendingDetail = null;
+        if (detail != null &&
+            mounted &&
+            _viewportActive &&
+            !_rasterizationSuspended) {
+          unawaited(
+            _getDetailImage(
+              detail.transform,
+              detail.viewport,
+              detail.zoom,
+              prefetch: detail.prefetch,
+            ),
+          );
+        }
       }
     }
   }

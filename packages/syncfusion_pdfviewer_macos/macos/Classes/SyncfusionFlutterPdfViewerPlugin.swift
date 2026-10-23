@@ -6,6 +6,12 @@ import AppKit
 
 public class SyncfusionFlutterPdfViewerPlugin: NSObject, FlutterPlugin {
     
+    // CoreGraphics rendering and the document repository share one serial queue.
+    // Flutter's macOS platform/UI thread must stay free for input and vsync.
+    private let renderQueue = DispatchQueue(
+        label: "syncfusion_pdfviewer_macos.render", autoreleaseFrequency: .workItem
+    )
+
     // Document repository
     var documentRepo = [String: CGPDFDocument?]()
     
@@ -18,9 +24,23 @@ public class SyncfusionFlutterPdfViewerPlugin: NSObject, FlutterPlugin {
     
     // Invokes the method call operations.
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        renderQueue.async {
+            autoreleasepool {
+                self.handleOnRenderQueue(call) { value in
+                    DispatchQueue.main.async { result(value) }
+                }
+            }
+        }
+    }
+
+    private func handleOnRenderQueue(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         if(call.method == "initializePdfRenderer")
         {
             initializePdfRenderer(call:call,result:result)
+        }
+        else if(call.method == "loadPdfFromFile")
+        {
+            loadPdfFromFile(call: call, result: result)
         }
         else if(call.method == "getPage")
         {
@@ -42,6 +62,9 @@ public class SyncfusionFlutterPdfViewerPlugin: NSObject, FlutterPlugin {
         {
             closeDocument(call:call,result:result)
         }
+        else {
+            result(FlutterMethodNotImplemented)
+        }
     }
     
     // Initializes the PDF Renderer and returns the page count.
@@ -55,17 +78,45 @@ public class SyncfusionFlutterPdfViewerPlugin: NSObject, FlutterPlugin {
         guard let cfData = CFDataCreate(nil, byte, byte.count) else {return}
         guard let dataProvider = CGDataProvider(data: cfData) else {return}
         guard let document = CGPDFDocument(dataProvider) else {return}
+        if document.isEncrypted && !document.unlockWithPassword(args["password"] as? String ?? "") {
+            result(FlutterError(code: "PDF_UNLOCK_FAILED", message: "Failed to unlock PDF", details: nil))
+            return
+        }
         documentRepo.updateValue(document, forKey: currentDocumentID)
         let pageCount = NSNumber(value: document.numberOfPages)
         result(pageCount.stringValue);
     }
     
+    // Keep parity with the viewer's file-based load path and encrypted PDFs.
+    private func loadPdfFromFile(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let path = args["path"] as? String,
+              let documentID = args["documentID"] as? String else {
+            result(FlutterError(code: "PDF_LOAD_FAILED", message: "Missing PDF path", details: nil))
+            return
+        }
+        let url = path.hasPrefix("file://") ? URL(string: path) : URL(fileURLWithPath: path)
+        guard let url = url,
+              let provider = CGDataProvider(url: url as CFURL),
+              let document = CGPDFDocument(provider) else {
+            result(FlutterError(code: "PDF_LOAD_FAILED", message: "Cannot open PDF", details: nil))
+            return
+        }
+        if document.isEncrypted && !document.unlockWithPassword(args["password"] as? String ?? "") {
+            result(FlutterError(code: "PDF_UNLOCK_FAILED", message: "Failed to unlock PDF", details: nil))
+            return
+        }
+        documentRepo[documentID] = document
+        result(NSNumber(value: document.numberOfPages).stringValue)
+    }
+
     private func closeDocument( call: FlutterMethodCall, result: @escaping FlutterResult)
     {
         guard let argument = call.arguments else {return}
         guard let documentID = argument as? String  else {return}
         self.documentRepo[documentID] = nil
         self.documentRepo.removeValue(forKey: documentID)
+        result(nil)
     }
     
     // Returns the width collection of rendered pages.
