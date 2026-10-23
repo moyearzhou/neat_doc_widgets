@@ -16,16 +16,36 @@ extension _PdfViewerPageLoading on SfPdfViewerState {
     });
   }
 
-  void _disposePageText() {
+  HoverTextLoader _ensureHoverTextLoader() =>
+      _hoverText ??= HoverTextLoader(
+        extract: (int page, bool Function() isCurrent) async {
+          if (!isCurrent() || _document == null) {
+            return null;
+          }
+          if (kIsWeb) {
+            // Web has no Dart isolates. Its fallback is deferred until scrolling
+            // settles; native platforms never parse text on the pointer/UI thread.
+            return extractHoverTextBounds(_document!, page);
+          }
+          _pageTextWorker ??= PageTextWorker(_pdfBytes, _password);
+          return _pageTextWorker!.extractHoverBounds(page, isCurrent);
+        },
+      );
+
+  void _disposePageText({bool documentChanged = true}) {
     _visiblePageText?.dispose();
     _visiblePageText = null;
-    _pageTextWorker?.dispose();
-    _pageTextWorker = null;
+    if (documentChanged) {
+      _hoverText?.dispose();
+      _hoverText = null;
+      _pageTextWorker?.dispose();
+      _pageTextWorker = null;
+    }
   }
 
   void _handleSemanticsChanged() {
     if (!SemanticsBinding.instance.semanticsEnabled) {
-      _disposePageText();
+      _disposePageText(documentChanged: false);
       for (final int page in _cachedImagePages) {
         _pdfPagesKey[page]?.currentState?.updateSemanticLabel(null);
       }

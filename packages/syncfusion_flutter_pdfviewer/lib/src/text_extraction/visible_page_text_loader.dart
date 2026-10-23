@@ -109,9 +109,10 @@ class VisiblePageTextLoader {
   }
 }
 
-/// One lazy worker per accessible viewer. Sends source bytes once, never the
+/// One lazy worker shared by accessibility and mouse-hover extraction.
+/// Sends source bytes once, never the
 /// UI's parsed PdfDocument (which can contain a large graph of cached objects).
-/// Ordinary reading does not create a worker or a second parsed document.
+/// Touch-only reading without accessibility creates no worker or second document.
 class PageTextWorker {
   PageTextWorker(Uint8List bytes, String? password) {
     _port.listen((dynamic message) {
@@ -122,9 +123,10 @@ class PageTextWorker {
       } else if (message is List &&
           message.length == 2 &&
           message.first is int) {
-        _pending?.complete(message[1] as String?);
+        _pending?.complete(message[1]);
         _pending = null;
       } else {
+        _unavailable = true;
         if (!_ready.isCompleted) {
           _ready.complete(null);
         }
@@ -139,13 +141,14 @@ class PageTextWorker {
       onExit: _port.sendPort,
     ).then(
       (Isolate isolate) {
-        if (_disposed) {
+        if (_disposed || _unavailable) {
           isolate.kill(priority: Isolate.immediate);
         } else {
           _isolate = isolate;
         }
       },
       onError: (Object error) {
+        _unavailable = true;
         if (!_ready.isCompleted) {
           _ready.complete(null);
         }
@@ -155,20 +158,40 @@ class PageTextWorker {
 
   final ReceivePort _port = ReceivePort();
   final Completer<SendPort?> _ready = Completer<SendPort?>();
-  Completer<String?>? _pending;
+  Completer<Object?>? _pending;
+  Future<void> _requests = Future<void>.value();
+  bool _unavailable = false;
   Isolate? _isolate;
   bool _disposed = false;
 
-  Future<String?> extract(int pageIndex) async {
-    final SendPort? port = await _ready.future;
-    if (_disposed || port == null) {
-      return null;
-    }
-    assert(_pending == null, 'Page extraction must be serialized');
-    final Completer<String?> pending = Completer<String?>();
-    _pending = pending;
-    port.send(pageIndex);
-    return pending.future;
+  Future<String?> extract(int pageIndex) async =>
+      await _request(pageIndex) as String?;
+
+  Future<Float64List?> extractHoverBounds(
+    int pageIndex,
+    bool Function() isCurrent,
+  ) async =>
+      await _request(<Object>['hover', pageIndex], isCurrent: isCurrent)
+          as Float64List?;
+
+  Future<Object?> _request(Object request, {bool Function()? isCurrent}) {
+    // Accessibility and hover share one parsed document and one request slot.
+    // Check freshness at dispatch too: a queued hover may already be obsolete.
+    final Future<Object?> result = _requests.then((_) async {
+      final SendPort? port = await _ready.future;
+      if (_disposed ||
+          _unavailable ||
+          port == null ||
+          (isCurrent != null && !isCurrent())) {
+        return null;
+      }
+      final Completer<Object?> pending = Completer<Object?>();
+      _pending = pending;
+      port.send(request);
+      return pending.future;
+    });
+    _requests = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
   }
 
   void dispose() {
@@ -193,15 +216,22 @@ void _extractVisiblePageText(List<Object?> arguments) {
     final PdfTextExtractor extractor = PdfTextExtractor(document);
     final ReceivePort requests = ReceivePort();
     reply.send(requests.sendPort);
-    requests.listen((dynamic page) {
-      if (page is! int) {
+    requests.listen((dynamic request) {
+      final bool hover = request is List && request.first == 'hover';
+      final int page;
+      if (hover) {
+        page = request[1] as int;
+      } else if (request is int) {
+        page = request;
+      } else {
         return;
       }
       try {
-        reply.send(<Object?>[
-          page,
-          extractor.extractText(startPageIndex: page),
-        ]);
+        final Object result =
+            hover
+                ? extractHoverTextBounds(document, page)
+                : extractor.extractText(startPageIndex: page);
+        reply.send(<Object?>[page, result]);
       } catch (_) {
         reply.send(<Object?>[page, null]);
       }
@@ -209,4 +239,20 @@ void _extractVisiblePageText(List<Object?> arguments) {
   } catch (_) {
     reply.send(null);
   }
+}
+
+/// Compact geometry for cursor hit testing; no glyph graph is copied to the UI.
+Float64List extractHoverTextBounds(PdfDocument document, int pageIndex) {
+  final List<double> bounds = <double>[document.pages[pageIndex].size.height];
+  for (final TextLine line in PdfTextExtractor(
+    document,
+  ).extractTextLines(startPageIndex: pageIndex)) {
+    bounds.addAll(<double>[
+      line.bounds.left,
+      line.bounds.top,
+      line.bounds.right,
+      line.bounds.bottom,
+    ]);
+  }
+  return Float64List.fromList(bounds);
 }
