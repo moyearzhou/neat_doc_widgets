@@ -88,20 +88,28 @@ extension _PdfPageRaster on PdfPageViewState {
     _pageRasterRunning = true;
     _runningPageZoom = zoomLevel;
     _runningPageGeneration = generation;
-    final operation = CancelableOperation<Uint8List?>.fromFuture(
-      _renderWhenCurrent(
+    final operation = _renderWhenCurrent(
+      () => PdfRasterBuffer.render(
+        'getPage',
+        {
+          'index': widget.pageIndex + 1,
+          'width': width,
+          'height': height,
+          'documentID': widget.documentID,
+        },
         () => PdfViewerPlatform.instance.getPage(
           widget.pageIndex + 1,
           width,
           height,
           widget.documentID,
         ),
-        generation,
       ),
+      generation,
     );
     _pageImageOperation = operation;
+    PdfRasterBuffer? pixels;
     try {
-      final Uint8List? pixels = await operation.valueOrCancellation();
+      pixels = await operation;
       if (pixels == null ||
           !mounted ||
           !_viewportActive ||
@@ -123,6 +131,7 @@ extension _PdfPageRaster on PdfPageViewState {
     } catch (_) {
       // Keep the previous bitmap if a native request or pixel decode fails.
     } finally {
+      await pixels?.dispose();
       if (identical(_pageImageOperation, operation)) {
         _pageImageOperation = null;
       }
@@ -164,8 +173,8 @@ extension _PdfPageRaster on PdfPageViewState {
     }
   }
 
-  Future<Uint8List?> _renderWhenCurrent(
-    Future<Uint8List?> Function() operation,
+  Future<PdfRasterBuffer?> _renderWhenCurrent(
+    Future<PdfRasterBuffer?> Function() operation,
     int generation,
   ) {
     bool current() =>
@@ -173,35 +182,40 @@ extension _PdfPageRaster on PdfPageViewState {
         _viewportActive &&
         !_rasterizationSuspended &&
         generation == _rasterGeneration;
-    return widget.rasterQueue?.render(
+    return widget.rasterQueue?.renderResource<PdfRasterBuffer>(
           operation,
           current,
           isVisible: () => _pageVisible,
+          onDiscard: (buffer) => unawaited(buffer.dispose()),
         ) ??
-        (current() ? operation() : Future<Uint8List?>.value());
+        (current() ? operation() : Future<PdfRasterBuffer?>.value());
   }
 
-  Future<ui.Image> _createImage(Uint8List pixels, int width, int height) async {
-    if (width <= 0 || height <= 0 || pixels.length < width * height * 4) {
+  Future<ui.Image> _createImage(
+    PdfRasterBuffer pixels,
+    int width,
+    int height,
+  ) async {
+    if (width <= 0 || height <= 0) {
       throw StateError('Incomplete PDF raster buffer');
     }
-    // Awaitable decoding propagates errors to the request's catch block.
-    final ui.ImmutableBuffer buffer = await ui.ImmutableBuffer.fromUint8List(
-      pixels,
+    final ui.ImmutableBuffer buffer = await pixels.importBuffer(
+      width * height * 4,
     );
-    final ui.ImageDescriptor descriptor = ui.ImageDescriptor.raw(
-      buffer,
-      width: width,
-      height: height,
-      pixelFormat: ui.PixelFormat.rgba8888,
-    );
+    ui.ImageDescriptor? descriptor;
     ui.Codec? codec;
     try {
+      descriptor = ui.ImageDescriptor.raw(
+        buffer,
+        width: width,
+        height: height,
+        pixelFormat: ui.PixelFormat.rgba8888,
+      );
       codec = await descriptor.instantiateCodec();
       return (await codec.getNextFrame()).image;
     } finally {
       codec?.dispose();
-      descriptor.dispose();
+      descriptor?.dispose();
       buffer.dispose();
     }
   }

@@ -21,6 +21,10 @@ rootProject.allprojects {
 
 apply plugin: 'com.android.library'
 
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+
 android {
     if (project.android.hasProperty("namespace")) {
         namespace 'com.syncfusion.flutter.pdfviewer'

@@ -108,18 +108,19 @@ extension _PdfPageDetail on PdfPageViewState {
           region.bounds.overlaps(latest.visible);
     }
 
-    CancelableOperation<Uint8List?>? operation;
+    Future<PdfRasterBuffer?>? operation;
+    PdfRasterBuffer? pixels;
     try {
-      operation = CancelableOperation<Uint8List?>.fromFuture(
-        widget.rasterQueue?.render(
-              () => _renderDetail(region, size),
-              current,
-              isVisible: () => _pageVisible,
-            ) ??
-            (current() ? _renderDetail(region, size) : Future.value()),
-      );
+      operation =
+          widget.rasterQueue?.renderResource<PdfRasterBuffer>(
+            () => _renderDetail(region, size),
+            current,
+            isVisible: () => _pageVisible,
+            onDiscard: (buffer) => unawaited(buffer.dispose()),
+          ) ??
+          (current() ? _renderDetail(region, size) : Future.value());
       _tileImageOperation = operation;
-      final Uint8List? pixels = await operation.valueOrCancellation();
+      pixels = await operation;
       if (pixels == null || !current()) {
         return;
       }
@@ -136,6 +137,7 @@ extension _PdfPageDetail on PdfPageViewState {
     } catch (_) {
       // A failing page leaves the existing raster visible, without retry loops.
     } finally {
+      await pixels?.dispose();
       if (identical(_tileImageOperation, operation)) {
         _tileImageOperation = null;
         final pending = _pendingDetail;
@@ -157,14 +159,26 @@ extension _PdfPageDetail on PdfPageViewState {
     }
   }
 
-  Future<Uint8List?> _renderDetail(PdfDetailRegion region, Size size) =>
-      PdfViewerPlatform.instance.getTileImage(
-        widget.pageIndex + 1,
-        region.pixelScale,
-        region.bounds.left,
-        region.bounds.top,
-        size.width,
-        size.height,
-        widget.documentID,
+  Future<PdfRasterBuffer?> _renderDetail(PdfDetailRegion region, Size size) =>
+      PdfRasterBuffer.render(
+        'getTileImage',
+        {
+          'pageNumber': widget.pageIndex + 1,
+          'scale': region.pixelScale,
+          'x': region.bounds.left,
+          'y': region.bounds.top,
+          'width': size.width,
+          'height': size.height,
+          'documentID': widget.documentID,
+        },
+        () => PdfViewerPlatform.instance.getTileImage(
+          widget.pageIndex + 1,
+          region.pixelScale,
+          region.bounds.left,
+          region.bounds.top,
+          size.width,
+          size.height,
+          widget.documentID,
+        ),
       );
 }

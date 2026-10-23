@@ -37,6 +37,7 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
     private Context context;
     private Map<String, PdfFileRenderer> documentRepo = new HashMap<>();
     private ExecutorService executorService;
+    private PdfRasterFiles rasterFiles;
 
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
@@ -61,6 +62,12 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
                 break;
             case "getTileImage":
                 getTileImage(call, result);
+                break;
+            case "releaseRasterFile":
+                if (rasterFiles != null) {
+                    rasterFiles.release((String) call.arguments);
+                }
+                result.success(null);
                 break;
             case "initializePdfRenderer":
                 initializePdfRenderer(call, result);
@@ -102,6 +109,10 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
                 }
             }
             documentRepo.clear();
+            if (rasterFiles != null) {
+                rasterFiles.close();
+                rasterFiles = null;
+            }
         });
         executorService.shutdown();
     }
@@ -112,18 +123,17 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
         int height = call.argument("height");
         String documentID = call.argument("documentID");
         try {
-            PdfRenderer.Page page = Objects.requireNonNull(documentRepo.get(documentID)).renderer.openPage(pageIndex - 1);
             final Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            bitmap.eraseColor(Color.WHITE);
-            final Rect rect = new Rect(0, 0, width, height);
-            page.render(bitmap, rect, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-            page.close();
-            ByteBuffer buffer = ByteBuffer.allocate(bitmap.getByteCount());
-            bitmap.copyPixelsToBuffer(buffer);
-            bitmap.recycle();
-            final byte[] imageBytes = buffer.array();
-            buffer.clear();
-            result.success(imageBytes);
+            try {
+                bitmap.eraseColor(Color.WHITE);
+                final Rect rect = new Rect(0, 0, width, height);
+                try (PdfRenderer.Page page = Objects.requireNonNull(documentRepo.get(documentID)).renderer.openPage(pageIndex - 1)) {
+                    page.render(bitmap, rect, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                }
+                replyRaster(call, result, bitmap);
+            } finally {
+                bitmap.recycle();
+            }
         } catch (Exception e) {
             result.error(e.getMessage(), e.getLocalizedMessage(), e.getMessage());
         }
@@ -138,23 +148,42 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
         double height = call.argument("height");
         String documentID = call.argument("documentID");
         try {
-            PdfRenderer.Page page = Objects.requireNonNull(documentRepo.get(documentID)).renderer.openPage(pageNumber - 1);
             final Bitmap bitmap = Bitmap.createBitmap((int) width, (int) height, Bitmap.Config.ARGB_8888);
-            bitmap.eraseColor(Color.WHITE);
-            Matrix matrix = new Matrix();
-            matrix.postTranslate((float) -x, (float) -y);
-            matrix.postScale((float) (scale), (float) (scale));
-            final Rect rect = new Rect(0, 0, (int) width, (int) height);
-            page.render(bitmap, rect, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-            page.close();
-            ByteBuffer buffer = ByteBuffer.allocate(bitmap.getByteCount());
-            bitmap.copyPixelsToBuffer(buffer);
-            bitmap.recycle();
-            final byte[] imageBytes = buffer.array();
-            buffer.clear();
-            result.success(imageBytes);
+            try {
+                bitmap.eraseColor(Color.WHITE);
+                Matrix matrix = new Matrix();
+                matrix.postTranslate((float) -x, (float) -y);
+                matrix.postScale((float) scale, (float) scale);
+                final Rect rect = new Rect(0, 0, (int) width, (int) height);
+                try (PdfRenderer.Page page = Objects.requireNonNull(documentRepo.get(documentID)).renderer.openPage(pageNumber - 1)) {
+                    page.render(bitmap, rect, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                }
+                replyRaster(call, result, bitmap);
+            } finally {
+                bitmap.recycle();
+            }
         } catch (Exception e) {
             result.error(e.getMessage(), e.getLocalizedMessage(), e.getMessage());
+        }
+    }
+
+    private void replyRaster(MethodCall call, Result result, Bitmap bitmap) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(bitmap.getByteCount());
+        bitmap.copyPixelsToBuffer(buffer);
+        if (Boolean.TRUE.equals(call.argument("rasterFile"))) {
+            try {
+                if (rasterFiles == null) {
+                    rasterFiles = new PdfRasterFiles(context.getCacheDir());
+                }
+                result.success(rasterFiles.write(buffer.array()));
+            } catch (IOException error) {
+                // Low cache space must not turn a readable page into a blank.
+                // Dart also accepts the byte reply from the legacy API.
+                result.success(buffer.array());
+            }
+        } else {
+            // Keep the published byte-array API for existing direct consumers.
+            result.success(buffer.array());
         }
     }
 

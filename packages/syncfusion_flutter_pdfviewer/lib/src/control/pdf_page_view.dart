@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:async/async.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +20,7 @@ import '../text_extraction/hover_text_loader.dart';
 import '../theme/theme.dart';
 import 'pdf_detail_region.dart';
 import 'pdf_page_render_surface.dart';
+import 'pdf_raster_buffer.dart';
 import 'pdf_raster_queue.dart';
 import 'pdf_scrollable.dart';
 import 'pdfviewer_canvas.dart';
@@ -280,8 +279,8 @@ class PdfPageViewState extends State<PdfPageView> {
 
   RawImage? _pdfPage;
   RawImage? _tileImage;
-  CancelableOperation<Uint8List?>? _tileImageOperation;
-  CancelableOperation<Uint8List?>? _pageImageOperation;
+  Future<PdfRasterBuffer?>? _tileImageOperation;
+  Future<PdfRasterBuffer?>? _pageImageOperation;
   Timer? _pageTimer;
   TileImage? _tileImageCache;
   ({
