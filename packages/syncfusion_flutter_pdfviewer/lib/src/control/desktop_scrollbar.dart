@@ -105,6 +105,10 @@ class _DesktopScrollbarState extends State<DesktopScrollbar> {
       valueListenable: widget.controller,
       builder: (BuildContext context, Matrix4 matrix, Widget? child) {
         return Stack(
+          // The viewer supplies loose viewport constraints. An axis without
+          // overflow returns a zero-size child; keep it from shrinking the
+          // overlay and clipping the other axis's positioned thumb.
+          fit: StackFit.expand,
           children: <Widget>[
             if (widget.canShowHorizontalScrollbar &&
                 widget.settings.showHorizontalScrollbar)
