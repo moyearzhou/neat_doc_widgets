@@ -8,81 +8,131 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:syncfusion_flutter_pdfviewer/src/control/pdf_page_view.dart';
 
 void main() {
-  testWidgets('cross-page loading indicators update without a document rebuild',
+  for (final custom in [false, true]) {
+    testWidgets(
+      '${custom ? 'custom' : 'default'} cross-page loading updates without a document rebuild',
       (tester) async {
-    const channel = MethodChannel('syncfusion_flutter_pdfviewer');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      switch (call.method) {
-        case 'loadPdfFromFile':
-          return '9';
-        case 'getPagesWidth':
-          return List<double>.filled(9, 600);
-        case 'getPagesHeight':
-          return List<double>.filled(9, 900);
-        default:
-          // Keep pages empty so indicator visibility changes remain observable.
-          return null;
-      }
-    });
-    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-    final document = PdfDocument();
-    document.pageSettings.size = const Size(600, 900);
-    for (int i = 0; i < 9; i++) {
-      document.pages.add();
-    }
-    final bytes = Uint8List.fromList(document.saveSync());
-    document.dispose();
-    final controller = PdfViewerController();
-    final changedPages = <int>[];
-    await tester.pumpWidget(MaterialApp(
-      home: SfPdfViewer.memory(
-        bytes,
-        controller: controller,
-        canShowScrollHead: false,
-        canShowScrollStatus: false,
-        onPageChanged: (details) => changedPages.add(details.newPageNumber),
-      ),
-    ));
-    for (int i = 0; i < 50 && controller.pageCount == 0; i++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pump();
-    }
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
-    Finder page(int number) => find.byWidgetPredicate(
+        const channel = MethodChannel('syncfusion_flutter_pdfviewer');
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          switch (call.method) {
+            case 'loadPdfFromFile':
+              return '9';
+            case 'getPagesWidth':
+              return List<double>.filled(9, 600);
+            case 'getPagesHeight':
+              return List<double>.filled(9, 900);
+            default:
+              // Keep pages empty so indicator visibility changes remain observable.
+              return null;
+          }
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final document = PdfDocument();
+        document.pageSettings.size = const Size(600, 900);
+        for (int i = 0; i < 9; i++) {
+          document.pages.add();
+        }
+        final bytes = Uint8List.fromList(document.saveSync());
+        document.dispose();
+        final controller = PdfViewerController();
+        final changedPages = <int>[];
+        final builtPages = <int?>[];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: SfPdfViewer.memory(
+              bytes,
+              controller: controller,
+              pageLoadingBuilder:
+                  custom
+                      ? (context, number) {
+                        builtPages.add(number);
+                        return Text('loading-${number ?? 'document'}');
+                      }
+                      : null,
+              canShowScrollHead: false,
+              canShowScrollStatus: false,
+              onPageChanged:
+                  (details) => changedPages.add(details.newPageNumber),
+            ),
+          ),
+        );
+        for (int i = 0; i < 50 && controller.pageCount == 0; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+        }
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+        // A static custom placeholder schedules no animation frames. Finish
+        // document/scroll-controller initialization before testing navigation.
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.pump();
+        Finder page(int number) => find.byWidgetPredicate(
           (widget) => widget is PdfPageView && widget.pageIndex == number - 1,
         );
-    Finder indicator(int number) => find.descendant(
+        Finder indicator(int number) => find.descendant(
           of: page(number),
-          matching: find.byType(CircularProgressIndicator),
+          matching:
+              custom
+                  ? find.text('loading-$number')
+                  : find.byType(CircularProgressIndicator),
         );
-    final unrelatedPage = tester.widget<PdfPageView>(page(9));
-    expect(indicator(1), findsOneWidget);
-    expect(indicator(5), findsNothing);
+        final unrelatedPage = tester.widget<PdfPageView>(page(9));
+        expect(indicator(1), findsOneWidget);
+        if (custom) {
+          expect(builtPages, containsAll([null, 1]));
+          expect(
+            builtPages,
+            isNot(contains(5)),
+            reason: 'Do not build hidden animations',
+          );
+          expect(find.byType(CircularProgressIndicator), findsNothing);
+        }
+        expect(indicator(5), findsNothing);
 
-    controller.jumpToPage(5);
-    await tester.pump();
-    expect(changedPages, contains(5));
-    expect(indicator(1), findsNothing);
-    for (final number in <int>[4, 5, 6]) {
-      expect(indicator(number), findsOneWidget);
-    }
-    expect(tester.widget<PdfPageView>(page(9)), same(unrelatedPage));
+        controller.jumpToPage(5);
+        await tester.pump();
+        expect(changedPages, contains(5));
+        expect(indicator(1), findsNothing);
+        for (final number in <int>[4, 5, 6]) {
+          expect(indicator(number), findsOneWidget);
+        }
+        expect(tester.widget<PdfPageView>(page(9)), same(unrelatedPage));
 
-    controller.jumpToPage(1);
-    await tester.pump();
-    expect(changedPages.last, 1);
-    expect(indicator(1), findsOneWidget);
-    expect(indicator(5), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    await tester.pump(const Duration(seconds: 3));
-    expect(tester.takeException(), isNull);
-    controller.dispose();
-  });
+        controller.jumpToPage(1);
+        await tester.pump();
+        expect(changedPages.last, 1);
+        expect(indicator(1), findsOneWidget);
+        expect(indicator(5), findsNothing);
+        if (custom) {
+          builtPages.clear();
+          await tester.pumpWidget(
+            MaterialApp(
+              home: SfPdfViewer.memory(
+                bytes,
+                controller: controller,
+                canShowPageLoadingIndicator: false,
+                pageLoadingBuilder: (context, number) {
+                  builtPages.add(number);
+                  return const Text('disabled loading');
+                },
+              ),
+            ),
+          );
+          await tester.pump();
+          expect(builtPages, isEmpty);
+          expect(find.text('disabled loading'), findsNothing);
+        }
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 3));
+        expect(tester.takeException(), isNull);
+        controller.dispose();
+      },
+    );
+  }
 
   testWidgets(
     'viewer renders both neighboring pages before they enter the viewport',

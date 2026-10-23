@@ -82,6 +82,7 @@ class PdfPageView extends StatefulWidget {
     this.onAnnotationSelectionChanged,
     this.onStickyNoteDoubleTapped, {
     this.pageRenderColorFilter,
+    this.pageLoadingBuilder,
     this.rasterQueue,
     this.hoverTextLoader,
   }) : super(key: key);
@@ -94,6 +95,9 @@ class PdfPageView extends StatefulWidget {
 
   /// Reading transformation shared by the base raster, zoom tiles and paper.
   final ColorFilter? pageRenderColorFilter;
+
+  /// Host loading UI; page numbers are one-based and colors are not filtered.
+  final Widget Function(BuildContext context, int? pageNumber)? pageLoadingBuilder;
 
   /// Document ID of current pdf
   final String documentID;
@@ -907,30 +911,30 @@ class PdfPageViewState extends State<PdfPageView> {
               child: const SizedBox.expand(),
             ),
           ),
-          Center(
-            child: Visibility(
-              visible: isVisible,
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  _pdfViewerThemeData!.progressBarColor ??
-                      _effectiveThemeData!.progressBarColor ??
-                      (Theme.of(context).colorScheme.primary),
-                ),
-                backgroundColor:
-                    _pdfViewerThemeData!.progressBarColor != null
-                        ? _pdfViewerThemeData!.progressBarColor!.withValues(
-                          alpha: 0.2,
-                        )
-                        : _effectiveThemeData!.progressBarColor != null
-                        ? _effectiveThemeData!.progressBarColor!.withValues(
-                          alpha: 0.2,
-                        )
-                        : (Theme.of(
-                          context,
-                        ).colorScheme.primary.withValues(alpha: 0.2)),
-              ),
+          if (isVisible)
+            Center(
+              child: widget.pageLoadingBuilder?.call(
+                    context, widget.pageIndex + 1) ??
+                  CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _pdfViewerThemeData!.progressBarColor ??
+                          _effectiveThemeData!.progressBarColor ??
+                          (Theme.of(context).colorScheme.primary),
+                    ),
+                    backgroundColor:
+                        _pdfViewerThemeData!.progressBarColor != null
+                            ? _pdfViewerThemeData!.progressBarColor!.withValues(
+                              alpha: 0.2,
+                            )
+                            : _effectiveThemeData!.progressBarColor != null
+                            ? _effectiveThemeData!.progressBarColor!.withValues(
+                              alpha: 0.2,
+                            )
+                            : (Theme.of(
+                              context,
+                            ).colorScheme.primary.withValues(alpha: 0.2)),
+                  ),
             ),
-          ),
         ],
       ),
     );

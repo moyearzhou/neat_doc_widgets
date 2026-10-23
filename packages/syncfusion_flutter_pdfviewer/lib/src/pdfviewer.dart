@@ -167,6 +167,7 @@ class SfPdfViewer extends StatefulWidget {
     this.undoController,
     this.onZoomLevelChanged,
     this.canShowPageLoadingIndicator = true,
+    this.pageLoadingBuilder,
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.onDocumentLoaded,
@@ -246,6 +247,7 @@ class SfPdfViewer extends StatefulWidget {
     this.undoController,
     this.onZoomLevelChanged,
     this.canShowPageLoadingIndicator = true,
+    this.pageLoadingBuilder,
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.onDocumentLoaded,
@@ -325,6 +327,7 @@ class SfPdfViewer extends StatefulWidget {
     this.undoController,
     this.onZoomLevelChanged,
     this.canShowPageLoadingIndicator = true,
+    this.pageLoadingBuilder,
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.enableDoubleTapZooming = true,
@@ -403,6 +406,7 @@ class SfPdfViewer extends StatefulWidget {
     this.undoController,
     this.onZoomLevelChanged,
     this.canShowPageLoadingIndicator = true,
+    this.pageLoadingBuilder,
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.enableDoubleTapZooming = true,
@@ -484,6 +488,7 @@ class SfPdfViewer extends StatefulWidget {
     this.undoController,
     this.onZoomLevelChanged,
     this.canShowPageLoadingIndicator = true,
+    this.pageLoadingBuilder,
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.enableDoubleTapZooming = true,
@@ -1205,6 +1210,12 @@ class SfPdfViewer extends StatefulWidget {
   /// }
   /// ```
   final bool canShowPageLoadingIndicator;
+
+  /// Builds loading UI with a one-based page number, or null during document load.
+  /// Only used while [canShowPageLoadingIndicator] permits the indicator.
+  /// Null preserves the default indicator. The builder is outside page pixel
+  /// filters, so the host controls its colors in day and night reading modes.
+  final Widget Function(BuildContext context, int? pageNumber)? pageLoadingBuilder;
 
   /// Indicates whether the text selection menu can be displayed after the text is selected.
   ///
@@ -3732,6 +3743,15 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   }
 
   Widget _getEmptyLinearProgressView() {
+    if (widget.pageLoadingBuilder != null) {
+      return Stack(
+        children: <Widget>[
+          _getEmptyContainer(),
+          if (widget.canShowPageLoadingIndicator)
+            Center(child: widget.pageLoadingBuilder!(context, null)),
+        ],
+      );
+    }
     return Stack(
       children: <Widget>[
         _getEmptyContainer(),
@@ -3926,6 +3946,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                     _onAnnotationSelectionChanged,
                     _onStickyNoteAnnotationDoubleTapped,
                     pageRenderColorFilter: widget.pageRenderColorFilter,
+                    pageLoadingBuilder: widget.pageLoadingBuilder,
                         rasterQueue: _rasterQueue,
                         hoverTextLoader: _ensureHoverTextLoader(),
                   );
