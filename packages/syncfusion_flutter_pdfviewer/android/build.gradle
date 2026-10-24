@@ -39,6 +39,12 @@ android {
     defaultConfig {
         minSdkVersion 24
     }
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
     lintOptions {
         disable 'InvalidPackage'
     }

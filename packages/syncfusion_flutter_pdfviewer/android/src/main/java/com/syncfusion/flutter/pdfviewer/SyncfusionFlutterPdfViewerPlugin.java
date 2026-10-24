@@ -168,23 +168,22 @@ public class SyncfusionFlutterPdfViewerPlugin implements FlutterPlugin, MethodCa
     }
 
     private void replyRaster(MethodCall call, Result result, Bitmap bitmap) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(bitmap.getByteCount());
-        bitmap.copyPixelsToBuffer(buffer);
         if (Boolean.TRUE.equals(call.argument("rasterFile"))) {
             try {
                 if (rasterFiles == null) {
                     rasterFiles = new PdfRasterFiles(context.getCacheDir());
                 }
-                result.success(rasterFiles.write(buffer.array()));
+                result.success(rasterFiles.write(bitmap.getWidth() * bitmap.getHeight() * 4,
+                        file -> PdfBitmapPixels.write(bitmap, file)));
+                return;
             } catch (IOException error) {
-                // Low cache space must not turn a readable page into a blank.
-                // Dart also accepts the byte reply from the legacy API.
-                result.success(buffer.array());
+                // Cache or native writer failures must not blank a readable
+                // page. Allocate the legacy raster only on this fallback path.
             }
-        } else {
-            // Keep the published byte-array API for existing direct consumers.
-            result.success(buffer.array());
         }
+        ByteBuffer buffer = ByteBuffer.allocate(bitmap.getByteCount());
+        bitmap.copyPixelsToBuffer(buffer);
+        result.success(buffer.array());
     }
 
     private void initializePdfRenderer(MethodCall call, Result result) {

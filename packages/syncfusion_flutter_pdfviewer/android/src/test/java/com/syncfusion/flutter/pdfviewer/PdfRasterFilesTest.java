@@ -40,6 +40,32 @@ public class PdfRasterFilesTest {
         assertFalse(new File((String) second.get("path")).exists());
     }
 
+    @Test public void directWriterPublishesExactPixelsAndCleansPartialFailures() throws Exception {
+        PdfRasterFiles store = new PdfRasterFiles(temporary.getRoot());
+        try {
+            byte[] bytes = {1, 2, 3, 4};
+            Map<String, Object> reply = store.write(4,
+                    file -> Files.write(file.toPath(), bytes));
+            File complete = new File((String) reply.get("path"));
+            assertArrayEquals(bytes, Files.readAllBytes(complete.toPath()));
+            for (boolean fail : new boolean[] {false, true}) {
+                try {
+                    store.write(8, file -> {
+                        Files.write(file.toPath(), bytes);
+                        if (fail) throw new java.io.IOException("partial write");
+                    });
+                    fail("Incomplete pixels must not be published");
+                } catch (java.io.IOException expected) {
+                    assertEquals(1, complete.getParentFile().listFiles().length);
+                }
+            }
+            store.release((String) reply.get("token"));
+            assertEquals(0, complete.getParentFile().listFiles().length);
+        } finally {
+            store.close();
+        }
+    }
+
     @Test public void newEngineCleansAbandonedFilesAndPreservesLiveEngines() throws Exception {
         File root = new File(temporary.getRoot(), "syncfusion_pdf_rasters");
         File abandoned = new File(root, "abandoned");

@@ -40,17 +40,30 @@ final class PdfRasterFiles {
     }
 
     Map<String, Object> write(byte[] pixels) throws IOException {
+        return write(pixels.length, file -> {
+            try (FileOutputStream output = new FileOutputStream(file)) {
+                output.write(pixels);
+            }
+        });
+    }
+
+    interface RasterWriter {
+        void write(File file) throws IOException;
+    }
+
+    Map<String, Object> write(int byteLength, RasterWriter writer) throws IOException {
         String token = Long.toString(++nextToken);
         File file = new File(directory, token + ".rgba");
         try {
-            try (FileOutputStream output = new FileOutputStream(file)) {
-                output.write(pixels);
+            writer.write(file);
+            if (file.length() != byteLength) {
+                throw new IOException("Incomplete PDF raster file");
             }
             files.put(token, file);
             Map<String, Object> reply = new HashMap<>();
             reply.put("token", token);
             reply.put("path", file.getAbsolutePath());
-            reply.put("byteLength", pixels.length);
+            reply.put("byteLength", byteLength);
             return reply;
         } catch (IOException error) {
             file.delete();

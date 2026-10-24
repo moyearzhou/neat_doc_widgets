@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(syncfusion_pdf_bitmap LANGUAGES CXX)
+
+add_library(syncfusion_pdf_bitmap SHARED pdf_bitmap_pixels.cpp)
+target_compile_features(syncfusion_pdf_bitmap PRIVATE cxx_std_11)
+target_link_libraries(syncfusion_pdf_bitmap PRIVATE jnigraphics)
