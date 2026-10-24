@@ -45,6 +45,7 @@ class PdfParser {
   Queue<int> integerQueue = Queue<int>();
   late bool _isPassword;
   late bool _isColorSpace;
+  bool _readStreamData = true;
   List<String>? _windows1252MapTable;
 
   //Properties
@@ -266,10 +267,15 @@ class PdfParser {
   }
 
   /// internal method
-  IPdfPrimitive? parseOffset(int offset) {
-    setOffset(offset);
-    advance();
-    return _parse();
+  IPdfPrimitive? parseOffset(int offset, {bool readStreamData = true}) {
+    _readStreamData = readStreamData;
+    try {
+      setOffset(offset);
+      advance();
+      return _parse();
+    } finally {
+      _readStreamData = true;
+    }
   }
 
   IPdfPrimitive? _parse() {
@@ -668,7 +674,12 @@ class PdfParser {
       _lexer!.skip = false;
     }
     IPdfPrimitive result;
-    if (_next == PdfTokenType.streamStart) {
+    if (_next == PdfTokenType.streamStart && !_readStreamData) {
+      // Header inspection must not tokenize or allocate the binary payload.
+      // This parser is isolated from the normal object cache and reader.
+      _lexer!.skip = true;
+      result = dic;
+    } else if (_next == PdfTokenType.streamStart) {
       result = _readStream(dic);
     } else {
       result = dic;

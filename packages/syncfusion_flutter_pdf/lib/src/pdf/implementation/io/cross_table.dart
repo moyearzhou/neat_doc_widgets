@@ -2,6 +2,7 @@ import '../../interfaces/pdf_interface.dart';
 import '../io/pdf_constants.dart';
 import '../primitives/pdf_array.dart';
 import '../primitives/pdf_dictionary.dart';
+import '../primitives/pdf_name.dart';
 import '../primitives/pdf_null.dart';
 import '../primitives/pdf_number.dart';
 import '../primitives/pdf_reference.dart';
@@ -280,6 +281,33 @@ class CrossTable {
 
   ObjectInformation? _returnValue(int? key) {
     return objects.containsKey(key) ? objects[key!] : null;
+  }
+
+  /// Checks a resource header without loading or caching its binary stream.
+  /// Image streams cannot be stored in object streams; unknown/malformed
+  /// headers fall back to the existing resource loader.
+  bool isImageReference(PdfReference? reference) {
+    if (reference == null) {
+      return false;
+    }
+    final info = this[reference.objNum];
+    if (info == null || info._archive != null) {
+      return false;
+    }
+    IPdfPrimitive? object = info.obj;
+    if (object == null) {
+      try {
+        final headerParser = PdfParser(this, PdfReader(_data), _crossTable);
+        object = headerParser.parseOffset(info.offset!, readStreamData: false);
+      } catch (_) {
+        return false;
+      }
+    }
+    if (object is! PdfDictionary) {
+      return false;
+    }
+    final subtype = object[PdfDictionaryProperties.subtype];
+    return subtype is PdfName && subtype.name == PdfDictionaryProperties.image;
   }
 
   /// internal method

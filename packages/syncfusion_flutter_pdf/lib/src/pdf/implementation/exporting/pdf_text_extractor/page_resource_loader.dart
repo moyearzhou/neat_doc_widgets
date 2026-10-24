@@ -49,6 +49,16 @@ class PageResourceLoader {
           PdfPageHelper.getHelper(page).crossTable;
       for (final PdfName? objKey in xobjects.items!.keys) {
         final IPdfPrimitive? objValue = xobjects[objKey];
+        // Text extraction needs Form XObjects, never image pixels. Inspect
+        // indirect headers before .object loads and copies the whole image.
+        if (objValue is PdfReferenceHolder &&
+            objValue.reference != null &&
+            ((crosstable ?? objValue.crossTable).crossTable?.isImageReference(
+                  objValue.reference,
+                ) ??
+                false)) {
+          continue;
+        }
         PdfDictionary? xobjectDictionary;
         PdfReferenceHolder? referenceHolder;
         if (objValue is PdfReferenceHolder &&
@@ -136,6 +146,14 @@ class PageResourceLoader {
       }
       if (xObjects != null) {
         xObjects.items!.forEach((PdfName? key, IPdfPrimitive? value) {
+          if (value is PdfReferenceHolder &&
+              value.reference != null &&
+              ((crosstable ?? value.crossTable).crossTable?.isImageReference(
+                    value.reference,
+                  ) ??
+                  false)) {
+            return;
+          }
           PdfDictionary? xObjectDictionary;
           PdfReferenceHolder? referenceHolder;
           if (value is PdfReferenceHolder && value.object is PdfDictionary) {

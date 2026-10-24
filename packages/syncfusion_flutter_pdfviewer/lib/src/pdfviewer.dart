@@ -50,6 +50,7 @@ import 'form_fields/pdf_list_box.dart';
 import 'form_fields/pdf_radio_button.dart';
 import 'form_fields/pdf_signature.dart';
 import 'form_fields/pdf_text_box.dart';
+import 'text_extraction/cancellable_search_task.dart';
 import 'text_extraction/hover_text_loader.dart';
 import 'text_extraction/text_extraction.dart';
 import 'text_extraction/visible_page_text_loader.dart';
@@ -57,6 +58,7 @@ import 'theme/theme.dart';
 
 part 'control/pdf_viewer_trackpad.dart';
 part 'control/pdf_viewer_page_loading.dart';
+part 'control/pdf_viewer_external_search.dart';
 
 /// Signature for [SfPdfViewer.onTextSelectionChanged] callback.
 typedef PdfTextSelectionChangedCallback =
@@ -1348,7 +1350,8 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   bool _isTextExtractionInProgress = false;
   final List<int> _matchedTextPageIndices = <int>[];
   final Map<int, String> _extractedTextCollection = <int, String>{};
-  Isolate? _textSearchIsolate;
+  CancellableSearchTask? _textSearchTask;
+  Future<void> _searchStopping = Future<void>.value();
   bool _isTablet = false;
   bool _isAndroidTV = false;
   bool _isAndroid = false;
@@ -2555,16 +2558,24 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       return;
     }
 
-    // Full-document extraction duplicates the parsed PDF in an isolate and can
-    // exceed the iOS memory limit for large files. Defer it until search is used.
+    // Defer full-document extraction until search. Workers receive source
+    // bytes instead of cloning the viewer's parsed document and its caches.
     _isTextExtractionInProgress = true;
-    final TextExtractionEngine engine = TextExtractionEngine(_document!);
+    final TextExtractionEngine engine = TextExtractionEngine(
+      _pdfBytes, _password ?? widget.password,
+    );
     _textExtractionEngine = engine;
+    await _searchStopping;
+    if (!mounted || _textExtractionEngine != engine) {
+      return;
+    }
     final Map<int, String> value = await engine.extractText();
     if (_textExtractionEngine != engine) {
       return;
     }
 
+    _textExtractionEngine = null;
+    engine.dispose();
     _extractedTextCollection.addAll(value);
     _isTextExtractionCompleted = true;
     _isTextExtractionInProgress = false;
@@ -5947,7 +5958,10 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
           }
           break;
       }
+    } else if (property == 'externalSearchResults') {
+      _applyExternalSearchResults();
     } else if (property == 'searchText') {
+      _killTextSearchIsolate();
       _pdfViewerController.clearSelection();
       _deselectAnnotation();
       _isSearchStarted = true;
@@ -5955,6 +5969,9 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       _pdfViewerController._pdfTextSearchResult._removeListener(
         _handleTextSearch,
       );
+      // clear() must cancel even the first-search extraction, before any
+      // highlighter worker exists or any result has been delivered.
+      _pdfViewerController._pdfTextSearchResult._addListener(_handleTextSearch);
       if (kIsWeb) {
         _textCollection = _pdfTextExtractor?.findText(<String>[
           _pdfViewerController._searchText,
@@ -5973,9 +5990,6 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
               _textCollection!.length;
           _pdfViewerController._pdfTextSearchResult._updateResult(true);
         }
-        _pdfViewerController._pdfTextSearchResult._addListener(
-          _handleTextSearch,
-        );
         setState(() {});
       } else {
         if (_isTextExtractionCompleted) {
@@ -6374,76 +6388,106 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
 
   /// Perform text search for mobile, windows and macOS platforms.
   Future<void> _performTextSearch() async {
-    _pdfViewerController._pdfTextSearchResult._addListener(_handleTextSearch);
     setState(() {});
     _pdfViewerController._pdfTextSearchResult.clear();
-    final ReceivePort receivePort = ReceivePort();
-    receivePort.listen((dynamic message) {
-      if (message is SendPort) {
-        message.send(<dynamic>[
-          receivePort.sendPort,
-          _pdfTextExtractor,
-          _pdfViewerController._searchText,
-          _pdfViewerController._textSearchOption,
-          _matchedTextPageIndices,
-        ]);
-      } else if (message is List<MatchedItem>) {
-        _textCollection!.addAll(message);
-        if (_textCollection!.isNotEmpty &&
-            _pdfViewerController._pdfTextSearchResult._totalSearchTextCount ==
-                0) {
-          _pdfViewerController._pdfTextSearchResult._updateResult(true);
-          _pdfViewerController._pdfTextSearchResult._currentOccurrenceIndex = 1;
-          _isPageChanged = false;
-          if (_pdfPages.isNotEmpty) {
-            _jumpToSearchInstance();
+    final task = CancellableSearchTask();
+    _textSearchTask = task;
+    // Snapshot the query before waiting; another edit invalidates this owner.
+    final query = _pdfViewerController._searchText;
+    final option = _pdfViewerController._textSearchOption;
+    final pages = List<int>.of(_matchedTextPageIndices);
+    try {
+      await _searchStopping;
+      if (!mounted || _textSearchTask != task) {
+        return;
+      }
+      await task.run(
+        _findTextAsync,
+        <Object?>[_pdfBytes, _password ?? widget.password, query, option, pages],
+        (message) {
+          if (!mounted || _textSearchTask != task) {
+            return;
           }
-          _pdfViewerController._pdfTextSearchResult._totalSearchTextCount =
-              _textCollection!.length;
-        }
-        if (_textCollection!.isNotEmpty) {
-          _pdfViewerController._pdfTextSearchResult._totalSearchTextCount =
-              _textCollection!.length;
-        }
-      } else if (message is String) {
-        if (_textCollection!.isEmpty) {
-          _pdfViewerController._pdfTextSearchResult._currentOccurrenceIndex = 0;
-          _pdfViewerController._pdfTextSearchResult._totalSearchTextCount = 0;
-          _pdfViewerController._pdfTextSearchResult._updateResult(false);
-        }
+          if (message is List<MatchedItem>) {
+            _textCollection!.addAll(message);
+            if (_textCollection!.isNotEmpty &&
+                _pdfViewerController
+                        ._pdfTextSearchResult
+                        ._totalSearchTextCount ==
+                    0) {
+              _pdfViewerController
+                  ._pdfTextSearchResult
+                  ._currentOccurrenceIndex = 1;
+              _isPageChanged = false;
+              if (_pdfPages.isNotEmpty) {
+                _jumpToSearchInstance();
+              }
+              _pdfViewerController._pdfTextSearchResult._updateResult(true);
+            }
+            _pdfViewerController._pdfTextSearchResult._totalSearchTextCount =
+                _textCollection!.length;
+          }
+        },
+      );
+      if (!mounted || _textSearchTask != task) {
+        return;
+      }
+      if (_textCollection!.isEmpty) {
+        _pdfViewerController._pdfTextSearchResult._currentOccurrenceIndex = 0;
+        _pdfViewerController._pdfTextSearchResult._updateResult(false);
+      }
+      _pdfViewerController._pdfTextSearchResult._updateSearchCompletedStatus(
+        true,
+      );
+    } catch (_) {
+      if (mounted && _textSearchTask == task) {
         _pdfViewerController._pdfTextSearchResult._updateSearchCompletedStatus(
           true,
         );
       }
-    });
-    _textSearchIsolate = await Isolate.spawn(
-      _findTextAsync,
-      receivePort.sendPort,
+    } finally {
+      if (_textSearchTask == task) {
+        _textSearchTask = null;
+      }
+    }
+  }
+
+  static void _findTextAsync(List<Object?> arguments) {
+    final reply = arguments[0]! as SendPort;
+    final payload = arguments[1]! as List;
+    final document = PdfDocument(
+      inputBytes: payload[0] as Uint8List,
+      password: payload[1] as String?,
     );
-  }
-
-  /// Text search is run in separate thread
-  static Future<void> _findTextAsync(SendPort sendPort) async {
-    final ReceivePort receivePort = ReceivePort();
-    sendPort.send(receivePort.sendPort);
-    final searchDetails = await receivePort.first;
-    final SendPort replyPort = searchDetails[0];
-    for (int i = 0; i < searchDetails[4].length; i++) {
-      final List<MatchedItem> result = searchDetails[1].findText(
-        <String>[searchDetails[2]],
-        startPageIndex: searchDetails[4][i],
-        searchOption: searchDetails[3],
-      );
-      replyPort.send(result);
+    try {
+      final extractor = PdfTextExtractor(document);
+      for (final page in payload[4] as List<int>) {
+        reply.send(
+          extractor.findText(
+            <String>[payload[2] as String],
+            startPageIndex: page,
+            searchOption: payload[3] as TextSearchOption?,
+          ),
+        );
+      }
+    } finally {
+      document.dispose();
     }
-    replyPort.send('SearchCompleted');
   }
 
-  /// Terminates the text search isolate.
+  /// Invalidate synchronously, then wait for exits before a replacement starts.
+  /// This also stops first-search extraction when input changes or search closes.
   void _killTextSearchIsolate() {
-    if (_textSearchIsolate != null) {
-      _textSearchIsolate?.kill(priority: Isolate.immediate);
-    }
+    final task = _textSearchTask;
+    final extraction = _textExtractionEngine;
+    _textSearchTask = null;
+    _textExtractionEngine = null;
+    _isTextExtractionInProgress = false;
+    _searchStopping = Future.wait<void>([
+      _searchStopping,
+      if (task != null) task.cancel(),
+      if (extraction != null) extraction.dispose(),
+    ]).then((_) {});
   }
 
   int _getInstanceInPage(int pageNumber, {bool lookForFirst = true}) {
@@ -6625,7 +6669,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         });
       }
     }
-    if (property == 'clear') {
+    if (property == 'clear' || property == 'clearPreservingFocus') {
       if (!kIsWeb) {
         _killTextSearchIsolate();
       }
@@ -6639,8 +6683,12 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       _pdfViewerController._pdfTextSearchResult._currentOccurrenceIndex = 0;
       _pdfViewerController._pdfTextSearchResult._totalSearchTextCount = 0;
       _pdfViewerController._pdfTextSearchResult._updateResult(false);
-      _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.focusNode
-          .requestFocus();
+      // Query editors clear stale highlights on every edit. Only an explicit
+      // legacy clear should transfer keyboard ownership back to the document.
+      if (property == 'clear') {
+        _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.focusNode
+            .requestFocus();
+      }
       _checkMount();
       return;
     }
@@ -7693,6 +7741,27 @@ class PdfViewerController extends ChangeNotifier with _ValueChangeNotifier {
     return _pdfTextSearchResult;
   }
 
+  List<MatchedItem> _externalSearchMatches = <MatchedItem>[];
+  bool _externalSearchCompleted = false;
+
+  /// Displays results from a caller-owned search without parsing the PDF again.
+  /// Results must be in page/occurrence order and belong to the loaded document.
+  /// Pass the cumulative results as pages finish; clear() retains its usual
+  /// behavior, and next/previous use the original match geometry.
+  PdfTextSearchResult setTextSearchResults(
+    String query,
+    List<MatchedItem> matches, {
+    required bool isComplete,
+  }) {
+    _searchText = query;
+    _externalSearchMatches = List<MatchedItem>.of(matches);
+    _externalSearchCompleted = isComplete;
+    _notifyPropertyChangedListeners(property: 'externalSearchResults');
+    // The viewer owns the copy from this point. Do not retain results twice.
+    _externalSearchMatches = <MatchedItem>[];
+    return _pdfTextSearchResult;
+  }
+
   /// Clears the text selection in [SfPdfViewer].
   ///
   /// Returns `true`, if the text selection is cleared properly.
@@ -7879,8 +7948,12 @@ class PdfTextSearchResult extends ChangeNotifier with _ValueChangeNotifier {
   /// Once this method is called, the search process will be cancelled in the UI and
   /// the [PdfTextSearchResult] object will be cleared, which in turn changes the
   /// [hasResult] property value to 'false`.
-  void clear() {
-    _notifyPropertyChangedListeners(property: 'clear');
+  /// Set [preserveFocus] while editing a query so clearing stale highlights
+  /// does not interrupt the caller's text input or IME composition.
+  void clear({bool preserveFocus = false}) {
+    _notifyPropertyChangedListeners(
+      property: preserveFocus ? 'clearPreservingFocus' : 'clear',
+    );
   }
 }
 
