@@ -6561,7 +6561,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
         });
       }
     }
-    if (property == 'clear') {
+    if (property == 'clear' || property == 'clearPreservingFocus') {
       if (!kIsWeb) {
         _killTextSearchIsolate();
       }
@@ -6575,8 +6575,12 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
       _pdfViewerController._pdfTextSearchResult._currentOccurrenceIndex = 0;
       _pdfViewerController._pdfTextSearchResult._totalSearchTextCount = 0;
       _pdfViewerController._pdfTextSearchResult._updateResult(false);
-      _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.focusNode
-          .requestFocus();
+      // Query editors clear stale highlights on every edit. Only an explicit
+      // legacy clear should transfer keyboard ownership back to the document.
+      if (property == 'clear') {
+        _pdfPagesKey[_pdfViewerController.pageNumber]?.currentState?.focusNode
+            .requestFocus();
+      }
       _checkMount();
       return;
     }
@@ -7838,8 +7842,12 @@ class PdfTextSearchResult extends ChangeNotifier with _ValueChangeNotifier {
   /// Once this method is called, the search process will be cancelled in the UI and
   /// the [PdfTextSearchResult] object will be cleared, which in turn changes the
   /// [hasResult] property value to 'false`.
-  void clear() {
-    _notifyPropertyChangedListeners(property: 'clear');
+  /// Set [preserveFocus] while editing a query so clearing stale highlights
+  /// does not interrupt the caller's text input or IME composition.
+  void clear({bool preserveFocus = false}) {
+    _notifyPropertyChangedListeners(
+      property: preserveFocus ? 'clearPreservingFocus' : 'clear',
+    );
   }
 }
 
