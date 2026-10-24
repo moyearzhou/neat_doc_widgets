@@ -5,6 +5,11 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:syncfusion_flutter_pdf/src/pdf/implementation/exporting/pdf_text_extractor/page_resource_loader.dart';
+import 'package:syncfusion_flutter_pdf/src/pdf/implementation/io/pdf_constants.dart';
+import 'package:syncfusion_flutter_pdf/src/pdf/implementation/pages/pdf_page.dart';
+import 'package:syncfusion_flutter_pdf/src/pdf/implementation/primitives/pdf_dictionary.dart';
+import 'package:syncfusion_flutter_pdf/src/pdf/implementation/primitives/pdf_reference_holder.dart';
+import 'package:syncfusion_flutter_pdf/src/pdf/implementation/primitives/pdf_stream.dart';
 
 Uint8List _fixture({
   bool escapedDictionary = false,
@@ -54,6 +59,53 @@ Uint8List _fixture({
 }
 
 void main() {
+  test(
+    'text extraction skips image payload without poisoning normal loading',
+    () {
+      // A valid image with substantial compressed data is not needed: the loader
+      // must inspect only its header, regardless of its binary contents.
+      final bytes = _fixtureWithImage();
+      final document = PdfDocument(inputBytes: bytes);
+      addTearDown(document.dispose);
+      final resources =
+          PdfPageHelper.getHelper(document.pages[0]).getResources()!;
+      final images =
+          resources[PdfDictionaryProperties.xObject]! as PdfDictionary;
+      final image = images.items!.values.single! as PdfReferenceHolder;
+      final table = image.crossTable.crossTable!;
+      expect(table.isImageReference(image.reference), isTrue);
+      final info = table[image.reference!.objNum]!;
+      expect(
+        info.obj,
+        isNull,
+        reason: 'Header lookup must not cache a partial image',
+      );
+      final extractor = PdfTextExtractor(document);
+      expect(extractor.extractText(), contains('rock'));
+      expect(extractor.extractTextLines().single.text, contains('rock'));
+      expect(extractor.findText(['rock']), hasLength(1));
+      expect(
+        info.obj,
+        isNull,
+        reason: 'Text resource loading must skip image pixels',
+      );
+      final loaded = image.object! as PdfStream;
+      expect(loaded.dataStream, hasLength(1024 * 1024));
+      expect(loaded.dataStream!.first, 255);
+      expect(loaded.dataStream!.last, 255);
+      // After text extraction, normal save/reopen still contains the image.
+      final reopened = PdfDocument(inputBytes: document.saveSync());
+      addTearDown(reopened.dispose);
+      final savedResources =
+          PdfPageHelper.getHelper(reopened.pages[0]).getResources()!;
+      final savedImages =
+          savedResources[PdfDictionaryProperties.xObject]! as PdfDictionary;
+      final savedImage =
+          (savedImages.items!.values.single! as PdfReferenceHolder).object!
+              as PdfStream;
+      expect(savedImage.dataStream, loaded.dataStream);
+    },
+  );
   const cnkiFixture = String.fromEnvironment('CNKI_PDF_FIXTURE');
   test(
     'CNKI original has Chinese geometry and saves text markup',
@@ -193,4 +245,48 @@ void main() {
       );
     }
   }
+}
+
+Uint8List _fixtureWithImage() {
+  const content = 'BT /F1 14 Tf 30 330 Td (rock context) Tj ET /Im1 Do';
+  final objects = <List<int>>[
+    ascii.encode('<< /Type /Catalog /Pages 2 0 R >>'),
+    ascii.encode('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
+    ascii.encode(
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>',
+    ),
+    ascii.encode(
+      '<< /Length ${content.length} >>\nstream\n$content\nendstream',
+    ),
+    ascii.encode('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'),
+    (BytesBuilder()
+          ..add(
+            ascii.encode(
+              '<< /Type /XObject /Subtype /Image /Width 1024 /Height 1024 /BitsPerComponent 8 /ColorSpace /DeviceGray /Length 1048576 >>\nstream\n',
+            ),
+          )
+          ..add(Uint8List(1024 * 1024)..fillRange(0, 1024 * 1024, 255))
+          ..add(ascii.encode('\nendstream')))
+        .takeBytes(),
+  ];
+  final bytes = BytesBuilder()..add(ascii.encode('%PDF-1.4\n'));
+  final offsets = <int>[0];
+  for (int i = 0; i < objects.length; i++) {
+    offsets.add(bytes.length);
+    bytes
+      ..add(ascii.encode('${i + 1} 0 obj\n'))
+      ..add(objects[i])
+      ..add(ascii.encode('\nendobj\n'));
+  }
+  final xref = bytes.length;
+  bytes.add(ascii.encode('xref\n0 ${offsets.length}\n0000000000 65535 f \n'));
+  for (final offset in offsets.skip(1)) {
+    bytes.add(ascii.encode('${offset.toString().padLeft(10, '0')} 00000 n \n'));
+  }
+  bytes.add(
+    ascii.encode(
+      'trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n',
+    ),
+  );
+  return bytes.takeBytes();
 }
