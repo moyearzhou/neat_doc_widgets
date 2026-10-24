@@ -1437,6 +1437,11 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   // Holds the field that may receive focus on a confirmed tap.
   FocusNode? _formFieldFocus;
 
+  // Extension-method tear-offs are distinct closures on each access. Keep the
+  // registered callback so dispose can remove it from the global binding;
+  // otherwise the binding retains this viewer and its document after closing.
+  late final VoidCallback _semanticsChangedListener = _handleSemanticsChanged;
+
   @override
   void initState() {
     super.initState();
@@ -1468,7 +1473,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _maxPdfPageWidth = 0;
     WidgetsBinding.instance.addObserver(this);
     SemanticsBinding.instance.addSemanticsEnabledListener(
-      _handleSemanticsChanged,
+      _semanticsChangedListener,
     );
   }
 
@@ -1630,7 +1635,7 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
   @override
   void dispose() {
     SemanticsBinding.instance.removeSemanticsEnabledListener(
-      _handleSemanticsChanged,
+      _semanticsChangedListener,
     );
     _disposePageText();
     _tileTimer?.cancel();
