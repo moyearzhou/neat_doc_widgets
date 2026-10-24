@@ -53,19 +53,47 @@ void main() {
     _compare(bytes, ['absent'], 0);
   });
 
-  test('shared geometry preserves standalone spaces and combined glyph slots', () {
-    final bytes = _encodedFixture(extraContent:
-      'BT /F1 14 Tf 30 240 Td <0072006F0063006B> Tj <0020> Tj '
-      '<000400200072006F0063006B> Tj 0 -30 Td '
-      '[<0004> 20 <0020> 10 <0072006F0063006B>] TJ '
-      '0 -30 Td <0020> Tj <0020> Tj <0072006F0063006B> Tj ET',
-    );
-    for (final query in ['rock', 'fi', 'fi rock', 'rock fi', 'גבא']) {
-      for (final option in <TextSearchOption?>[null, ...TextSearchOption.values]) {
-        _compare(bytes, [query], 0, option: option);
+  test(
+    'shared geometry preserves standalone spaces and combined glyph slots',
+    () {
+      final bytes = _encodedFixture(
+        extraContent:
+            'BT /F1 14 Tf 30 240 Td <0072006F0063006B> Tj <0020> Tj '
+            '<000400200072006F0063006B> Tj 0 -30 Td '
+            '[<0004> 20 <0020> 10 <0072006F0063006B>] TJ '
+            '0 -30 Td <0020> Tj <0020> Tj <0072006F0063006B> Tj ET',
+      );
+      for (final query in ['rock', 'fi', 'fi rock', 'rock fi', 'גבא']) {
+        for (final option in <TextSearchOption?>[
+          null,
+          ...TextSearchOption.values,
+        ]) {
+          _compare(bytes, [query], 0, option: option);
+        }
       }
-    }
-  });
+    },
+  );
+
+  test(
+    'detached index survives source disposal and preserves query options',
+    () {
+      final document = PdfDocument(inputBytes: _encodedFixture());
+      final extractor = PdfTextExtractor(document);
+      final index =
+          extractor
+              .searchPage(['absent'], pageIndex: 0, buildSearchIndex: true)
+              .searchIndex!;
+      final expected = <String, List<Object?>>{
+        for (final query in ['rock', 'fi', 'גבא', 'absent'])
+          query: _matches(extractor.findText([query])),
+      };
+      document.dispose();
+      for (final query in expected.keys) {
+        expect(_matches(index.findText([query])), expected[query]);
+      }
+      expect(index.retainedBytes, greaterThan(0));
+    },
+  );
 
   test(
     'repeated calls release page scope and preserve subsequent extraction/save',
@@ -134,14 +162,35 @@ void _compare(
     expect(_matches(result.matches), _matches(expected));
     expect(_lines(result.textLines), _lines(lines));
     final cached = PdfTextExtractor(candidate).searchPage(
-      List.of(query), pageIndex: page, searchOption: option,
+      List.of(query),
+      pageIndex: page,
+      searchOption: option,
       cachedText: result.searchText,
     );
     expect(_matches(cached.matches), _matches(expected));
     expect(_lines(cached.textLines), _lines(lines));
+    // Build from an unrelated query: all later terms must use detached input,
+    // even if the seed query had no matches on this page.
+    final indexed = PdfTextExtractor(
+      candidate,
+    ).searchPage(['zzzzabsent'], pageIndex: page, buildSearchIndex: true);
+    expect(indexed.searchIndex, isNotNull);
+    expect(
+      _matches(
+        indexed.searchIndex!.findText(List.of(query), searchOption: option),
+      ),
+      _matches(expected),
+    );
+    expect(
+      _lines(indexed.textLines),
+      _lines(legacy.extractTextLines(startPageIndex: page)),
+    );
     final withoutLines = PdfTextExtractor(candidate).searchPage(
-      List.of(query), pageIndex: page, searchOption: option,
-      cachedText: result.searchText, includeTextLines: false,
+      List.of(query),
+      pageIndex: page,
+      searchOption: option,
+      cachedText: result.searchText,
+      includeTextLines: false,
     );
     expect(_matches(withoutLines.matches), _matches(expected));
     expect(withoutLines.textLines, isEmpty);

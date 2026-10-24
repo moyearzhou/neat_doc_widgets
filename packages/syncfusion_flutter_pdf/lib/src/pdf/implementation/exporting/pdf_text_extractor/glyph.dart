@@ -3,8 +3,16 @@ import 'dart:ui';
 import '../../graphics/fonts/enums.dart';
 import 'matrix_helper.dart';
 
+/// Minimal geometry consumed by the search matcher; compact snapshots implement
+/// this without allocating font transforms or retaining renderer resources.
+abstract interface class PdfSearchGlyph {
+  String get toUnicode;
+  Rect get boundingRect;
+  int get rotationAngle;
+}
+
 /// internal class
-class Glyph {
+class Glyph implements PdfSearchGlyph {
   /// internal constructor
   Glyph() {
     _initialize();
@@ -21,6 +29,7 @@ class Glyph {
   late MatrixHelper transformMatrix;
 
   /// internal field
+  @override
   late Rect boundingRect;
 
   /// internal field
@@ -51,6 +60,7 @@ class Glyph {
   List<PdfFontStyle> fontStyle = <PdfFontStyle>[];
 
   /// internal field
+  @override
   String toUnicode = '';
 
   /// Empty alignment slot added only by line extraction for a combined glyph.
@@ -60,6 +70,7 @@ class Glyph {
   late bool isRotated;
 
   /// internal field
+  @override
   late int rotationAngle;
 
   /// internal field

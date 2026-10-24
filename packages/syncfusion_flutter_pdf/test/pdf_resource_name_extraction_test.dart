@@ -77,7 +77,10 @@ void main() {
     expect(expected.first.bounds, isNot(expected.last.bounds));
     final extractor = PdfTextExtractor(document);
     for (var i = 0; i < 3; i++) {
-      final result = extractor.searchPage(['Hello'], pageIndex: 0);
+      final result = extractor.searchPage(['Hello'], pageIndex: 0,
+          buildSearchIndex: true);
+      expect(result.searchIndex!.findText(['Hello']).map((m) => m.bounds),
+          expected.map((m) => m.bounds));
       expect(result.matches.map((m) => m.bounds), expected.map((m) => m.bounds));
       expect(result.textLines.map((l) => l.text), lines.map((l) => l.text));
       expect(result.textLines.map((l) => l.bounds), lines.map((l) => l.bounds));

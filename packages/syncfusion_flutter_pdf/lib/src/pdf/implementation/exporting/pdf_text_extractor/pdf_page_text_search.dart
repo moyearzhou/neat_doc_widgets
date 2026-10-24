@@ -3,7 +3,15 @@ part of 'pdf_text_extractor.dart';
 /// A single page's original matches and summary lines. No parsed PDF resources
 /// or renderer are retained by this result; callers can discard it per page.
 class PdfPageTextSearchResult {
-  PdfPageTextSearchResult._(this.searchText, this.matches, this.textLines);
+  PdfPageTextSearchResult._(
+    this.searchText,
+    this.matches,
+    this.textLines,
+    this.searchIndex,
+  );
+
+  /// Compact keyword-independent matching input, when explicitly requested.
+  final PdfPageSearchIndex? searchIndex;
 
   /// Keyword-independent layout text; safe to retain without PDF resources.
   final PdfPageSearchText searchText;
@@ -14,7 +22,7 @@ class PdfPageTextSearchResult {
   /// Matches in the same order and coordinates as [PdfTextExtractor.findText].
   final List<MatchedItem> matches;
 
-  /// Summary lines, built only when this page has a match.
+  /// Summary lines for matching pages, or all pages when building an index.
   final List<TextLine> textLines;
 }
 
@@ -42,6 +50,8 @@ class _PageSearchRecords {
   String layoutText = '';
   ImageRenderer? summaryRenderer;
   bool collectSummary = false;
+  bool buildIndex = false;
+  PdfPageSearchIndex? searchIndex;
 }
 
 extension _PdfPageTextSearch on PdfTextExtractor {
@@ -51,6 +61,7 @@ extension _PdfPageTextSearch on PdfTextExtractor {
     TextSearchOption? searchOption,
     PdfPageSearchText? cachedText,
     bool includeTextLines,
+    bool buildSearchIndex,
   ) {
     _checkPageNumber(pageIndex);
     if (cachedText != null && cachedText.pageIndex != pageIndex) {
@@ -67,7 +78,8 @@ extension _PdfPageTextSearch on PdfTextExtractor {
     final extracting = helper.isTextExtraction;
     final wasLayout = _isLayout;
     final scope = _PageSearchRecords(page);
-    scope.collectSummary = includeTextLines;
+    scope.collectSummary = includeTextLines || buildSearchIndex;
+    scope.buildIndex = buildSearchIndex;
     _pageSearchRecords = scope;
     try {
       _currentPageIndex = pageIndex;
@@ -79,13 +91,15 @@ extension _PdfPageTextSearch on PdfTextExtractor {
       );
       // Matching has its own glyph sequence; line-only padding/whitespace
       // cannot change the legacy matcher's offsets or coordinates.
-      final lines = !includeTextLines || matches.isEmpty
-          ? <TextLine>[]
-          : _getTextLine(page, rendered: scope.summaryRenderer);
+      final lines =
+          !includeTextLines || (matches.isEmpty && !buildSearchIndex)
+              ? <TextLine>[]
+              : _getTextLine(page, rendered: scope.summaryRenderer);
       return PdfPageTextSearchResult._(
         cachedText ?? PdfPageSearchText._(pageIndex, scope.layoutText),
         matches,
         lines,
+        scope.searchIndex,
       );
     } finally {
       _pageSearchRecords = null;
