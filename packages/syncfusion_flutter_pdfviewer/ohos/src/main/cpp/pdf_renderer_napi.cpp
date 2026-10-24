@@ -14,6 +14,7 @@
 
 #include "fpdf_edit.h"
 #include "fpdfview.h"
+#include "pdf_raster_pixels.h"
 
 namespace {
 
@@ -224,7 +225,8 @@ void ExecuteRenderPage(napi_env, void* data) {
     return;
   }
 
-  FPDF_BITMAP bitmap = FPDFBitmap_Create(request->width, request->height, 1);
+  FPDF_BITMAP bitmap = CreatePdfRasterBitmap(
+      request->width, request->height, request->pixels);
   if (bitmap == nullptr) {
     FPDF_ClosePage(page);
     request->error = "PDFium failed to allocate page bitmap";
@@ -238,41 +240,15 @@ void ExecuteRenderPage(napi_env, void* data) {
                         FPDFPage_GetRotation(page), FPDF_ANNOT | FPDF_LCD_TEXT);
   const int64_t renderMs = ElapsedMillis(renderStartedAt);
 
-  const auto* source = static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bitmap));
-  if (source == nullptr) {
-    FPDFBitmap_Destroy(bitmap);
-    FPDF_ClosePage(page);
-    request->error = "PDFium page bitmap buffer is unavailable";
-    return;
-  }
-
-  const int stride = FPDFBitmap_GetStride(bitmap);
-  const size_t rowBytes = static_cast<size_t>(request->width) * 4;
+  // The PDFium bitmap borrows request->pixels; release its handle before
+  // converting or handing that storage to the asynchronous completion callback.
+  FPDFBitmap_Destroy(bitmap);
   const auto copyStartedAt = RenderClock::now();
-  request->pixels.resize(rowBytes * static_cast<size_t>(request->height));
-  if (request->outputBgra) {
-    for (int row = 0; row < request->height; ++row) {
-      std::memcpy(
-          request->pixels.data() + static_cast<size_t>(row) * rowBytes,
-          source + static_cast<size_t>(row) * stride, rowBytes);
-    }
-  } else {
-    for (int row = 0; row < request->height; ++row) {
-      const uint8_t* sourceRow = source + static_cast<size_t>(row) * stride;
-      uint8_t* destinationRow =
-          request->pixels.data() + static_cast<size_t>(row) * rowBytes;
-      for (int column = 0; column < request->width; ++column) {
-        const size_t offset = static_cast<size_t>(column) * 4;
-        destinationRow[offset] = sourceRow[offset + 2];
-        destinationRow[offset + 1] = sourceRow[offset + 1];
-        destinationRow[offset + 2] = sourceRow[offset];
-        destinationRow[offset + 3] = sourceRow[offset + 3];
-      }
-    }
+  if (!request->outputBgra) {
+    ConvertPdfRasterToRgba(request->pixels);
   }
   const int64_t copyMs = ElapsedMillis(copyStartedAt);
 
-  FPDFBitmap_Destroy(bitmap);
   FPDF_ClosePage(page);
   request->workerFinishedAt = RenderClock::now();
   lock.unlock();
@@ -412,7 +388,8 @@ void ExecuteRenderTile(napi_env, void* data) {
     return;
   }
 
-  FPDF_BITMAP bitmap = FPDFBitmap_Create(request->width, request->height, 1);
+  FPDF_BITMAP bitmap = CreatePdfRasterBitmap(
+      request->width, request->height, request->pixels);
   if (bitmap == nullptr) {
     FPDF_ClosePage(page);
     request->error = "PDFium failed to allocate tile bitmap";
@@ -439,35 +416,11 @@ void ExecuteRenderTile(napi_env, void* data) {
                         FPDF_ANNOT | FPDF_LCD_TEXT);
   const int64_t renderMs = ElapsedMillis(renderStartedAt);
 
-  const auto* source = static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bitmap));
-  if (source == nullptr) {
-    FPDFBitmap_Destroy(bitmap);
-    FPDF_ClosePage(page);
-    request->error = "PDFium tile bitmap buffer is unavailable";
-    return;
-  }
-  const int stride = FPDFBitmap_GetStride(bitmap);
-  const size_t rowBytes = static_cast<size_t>(request->width) * 4;
+  FPDFBitmap_Destroy(bitmap);
   const auto copyStartedAt = RenderClock::now();
-  request->pixels.resize(rowBytes * static_cast<size_t>(request->height));
-  for (int row = 0; row < request->height; ++row) {
-    const uint8_t* sourceRow = source + static_cast<size_t>(row) * stride;
-    uint8_t* destinationRow =
-        request->pixels.data() + static_cast<size_t>(row) * rowBytes;
-    // The platform interface promises RGBA bytes, while PDFium exposes BGRA.
-    // Keep that conversion native so the shared Dart renderer stays identical
-    // on Android, iOS, and OpenHarmony.
-    for (int column = 0; column < request->width; ++column) {
-      const size_t offset = static_cast<size_t>(column) * 4;
-      destinationRow[offset] = sourceRow[offset + 2];
-      destinationRow[offset + 1] = sourceRow[offset + 1];
-      destinationRow[offset + 2] = sourceRow[offset];
-      destinationRow[offset + 3] = sourceRow[offset + 3];
-    }
-  }
+  ConvertPdfRasterToRgba(request->pixels);
   const int64_t copyMs = ElapsedMillis(copyStartedAt);
 
-  FPDFBitmap_Destroy(bitmap);
   FPDF_ClosePage(page);
   lock.unlock();
   OH_LOG_Print(LOG_APP, LOG_INFO, kLogDomain, kLogTag,
