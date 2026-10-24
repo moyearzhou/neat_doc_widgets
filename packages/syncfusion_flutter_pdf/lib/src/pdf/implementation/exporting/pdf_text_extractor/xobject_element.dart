@@ -76,9 +76,11 @@ class XObjectElement {
     GraphicStateCollection? graphicsStates,
     GraphicObjectDataCollection? objects,
     double? currentPageHeight,
-    List<Glyph>? glyphList,
-  ) {
+    List<Glyph>? glyphList, {
+    bool collectSearchGlyphs = false,
+  }) {
     glyphList = <Glyph>[];
+    List<Glyph> searchGlyphs = <Glyph>[];
     List<TextElement>? extractTextElement;
     if (_objectType != null &&
         _objectType == 'Form' &&
@@ -154,6 +156,7 @@ class XObjectElement {
         g,
       );
       renderer.isExtractLineCollection = isExtractTextLine!;
+      renderer.collectSearchGlyphs = collectSearchGlyphs;
       renderer.graphicsObjects = objects;
       final MatrixHelper parentMatrix =
           objects!.last.currentTransformationMatrix!;
@@ -177,6 +180,7 @@ class XObjectElement {
         renderer.xobjectGraphicsCount--;
       }
       glyphList = renderer.imageRenderGlyphList;
+      searchGlyphs = renderer.searchGlyphs;
       objects.last.currentTransformationMatrix = parentMatrix;
       extractTextElement = renderer.extractTextElement;
     }
@@ -185,6 +189,7 @@ class XObjectElement {
       'glyphList': glyphList,
       'objects': objects,
       'extractTextElement': extractTextElement,
+      'searchGlyphs': searchGlyphs,
     };
   }
 }

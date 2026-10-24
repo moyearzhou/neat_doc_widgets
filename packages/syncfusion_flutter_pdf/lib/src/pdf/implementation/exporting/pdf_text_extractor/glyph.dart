@@ -53,6 +53,9 @@ class Glyph {
   /// internal field
   String toUnicode = '';
 
+  /// Empty alignment slot added only by line extraction for a combined glyph.
+  bool isTextExtractionPadding = false;
+
   /// internal field
   late bool isRotated;
 

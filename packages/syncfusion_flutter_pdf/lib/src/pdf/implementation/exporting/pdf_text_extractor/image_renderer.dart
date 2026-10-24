@@ -61,6 +61,11 @@ class ImageRenderer {
   }
 
   //Fields
+  /// Collect the legacy search sequence alongside line-extraction geometry.
+  /// Line-only whitespace and combined-glyph padding must not enter matching.
+  bool collectSearchGlyphs = false;
+  final List<Glyph> searchGlyphs = <Glyph>[];
+
   /// internal field
   GraphicObjectDataCollection? graphicsObjects;
   GraphicStateCollection? _graphicsState;
@@ -639,9 +644,13 @@ class ImageRenderer {
           graphicsObjects,
           currentPageHeight,
           xObjectGlyphs,
+          collectSearchGlyphs: collectSearchGlyphs,
         );
         _graphicsState = result['graphicStates'] as GraphicStateCollection?;
         graphicsObjects = result['objects'] as GraphicObjectDataCollection?;
+        if (collectSearchGlyphs) {
+          searchGlyphs.addAll(result['searchGlyphs'] as List<Glyph>);
+        }
         xObjectGlyphs = result['glyphList'] as List<Glyph>?;
         final List<TextElement>? tempExtractTextElement =
             result['extractTextElement'] as List<TextElement>?;
@@ -760,6 +769,14 @@ class ImageRenderer {
         );
         _textElementWidth = renderedResult['textElementWidth'] as double;
         textMatrix = renderedResult['tempTextMatrix'] as MatrixHelper;
+      }
+      if (collectSearchGlyphs && !structure.isWhiteSpace) {
+        // Capture before the line extractor inserts standalone whitespace.
+        searchGlyphs.addAll(
+          element.textElementGlyphList.where(
+            (glyph) => !glyph.isTextExtractionPadding,
+          ),
+        );
       }
       if (!structure.isWhiteSpace) {
         if (_whiteSpace.isNotEmpty &&
@@ -895,6 +912,14 @@ class ImageRenderer {
       );
       _textElementWidth = renderedResult['textElementWidth'] as double;
       textMatrix = renderedResult['tempTextMatrix'] as MatrixHelper;
+      if (collectSearchGlyphs && !structure.isWhiteSpace) {
+        // Capture before the line extractor inserts standalone whitespace.
+        searchGlyphs.addAll(
+          element.textElementGlyphList.where(
+            (glyph) => !glyph.isTextExtractionPadding,
+          ),
+        );
+      }
       if (!structure.isWhiteSpace) {
         if (_whiteSpace.isNotEmpty &&
             extractTextElement.isNotEmpty &&

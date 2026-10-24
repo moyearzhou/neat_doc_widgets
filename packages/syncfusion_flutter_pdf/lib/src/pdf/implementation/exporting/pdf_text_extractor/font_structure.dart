@@ -4528,15 +4528,16 @@ class FontStructure {
       ) //check for octal characters
       {
         if (i < decodedText.length) {
-          int val = 0;
-          try {
-            val = int.parse(decodedText[i]).toSigned(32);
-            if (val <= 8) {
-              octalText += decodedText[i];
-            }
-          } on Exception {
+          // A non-digit is a normal escape (e.g. \n or \(). Do not allocate
+          // a FormatException for every such character. Preserve the legacy
+          // 8/9 handling here; octal validation below remains unchanged.
+          final int digit = decodedText.codeUnitAt(i) - 0x30;
+          if (digit < 0 || digit > 9) {
             octalText = '';
             break;
+          }
+          if (digit <= 8) {
+            octalText += decodedText[i];
           }
         } else {
           octalText = '';

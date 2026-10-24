@@ -32,6 +32,8 @@ import 'text_line.dart';
 import 'text_word.dart';
 import 'xobject_element.dart';
 
+part 'pdf_page_text_search.dart';
+
 /// Represents a text extractor from an existing PDF document
 class PdfTextExtractor {
   //Constructor
@@ -80,6 +82,7 @@ class PdfTextExtractor {
   Bidi? _bidiInstance;
   MatrixHelper? _initialTransform;
   String? _actualText;
+  _PageSearchRecords? _pageSearchRecords;
 
   //Properties
   Bidi get _bidi {
@@ -169,6 +172,23 @@ class PdfTextExtractor {
   }) {
     return _findText(searchString, startPageIndex, endPageIndex, searchOption);
   }
+
+  /// Searches one page while reusing its parsed content for match geometry and
+  /// optional summary lines. Parsed records are released before this returns.
+  /// Matching and coordinates follow [findText]; lines follow [extractTextLines].
+  /// [cachedText] must originate from the same unchanged document/page revision;
+  /// callers own revision invalidation when bytes or page content change.
+  /// Set [includeTextLines] to false when the caller already owns summary lines
+  /// from this same page revision; match coordinates are still fully computed.
+  PdfPageTextSearchResult searchPage(
+    List<String> searchString, {
+    required int pageIndex,
+    TextSearchOption? searchOption,
+    PdfPageSearchText? cachedText,
+    bool includeTextLines = true,
+  }) => _searchPageWithRecords(
+    searchString, pageIndex, searchOption, cachedText, includeTextLines,
+  );
 
   //Implementation
   void _checkPageNumber(int pageNumber) {
@@ -349,7 +369,7 @@ class PdfTextExtractor {
     } else {
       resultantText = _renderText(recordCollection, pageResources);
     }
-    if (recordCollection != null) {
+    if (recordCollection != null && _pageSearchRecords == null) {
       recordCollection.recordCollection.clear();
     }
     if (pageResources.resources.isNotEmpty) {
@@ -376,27 +396,32 @@ class PdfTextExtractor {
     return resultantText;
   }
 
-  List<TextLine> _getTextLine(PdfPage pdfPage) {
+  List<TextLine> _getTextLine(PdfPage pdfPage, {ImageRenderer? rendered}) {
     final List<TextLine> result = <TextLine>[];
     _currentPage = pdfPage;
     _fontSize = 0;
     PdfPageHelper.getHelper(pdfPage).isTextExtraction = true;
     final bool isChanged = _checkPageDictionary(pdfPage);
     final bool isContentChanged = _checkContentArray(pdfPage);
-    final PdfRecordCollection? recordCollection = _getRecordCollection(pdfPage);
-    final PdfPageResources pageResources = _resourceLoader.getPageResources(
-      pdfPage,
-    );
-    final ImageRenderer renderer = ImageRenderer(
-      recordCollection,
-      pageResources,
-      pdfPage.size.height * 1.3333333333333333,
-    );
-    renderer.isExtractLineCollection = true;
     final double rotation = _getPageRotation(pdfPage);
-    renderer.pageRotation = rotation;
-    renderer.renderAsImage();
-    renderer.isExtractLineCollection = false;
+    final ImageRenderer renderer;
+    if (rendered != null) {
+      renderer = rendered;
+    } else {
+      final PdfRecordCollection? recordCollection = _getRecordCollection(pdfPage);
+      final PdfPageResources pageResources = _resourceLoader.getPageResources(
+        pdfPage,
+      );
+      renderer = ImageRenderer(
+        recordCollection,
+        pageResources,
+        pdfPage.size.height * 1.3333333333333333,
+      );
+      renderer.isExtractLineCollection = true;
+      renderer.pageRotation = rotation;
+      renderer.renderAsImage();
+      renderer.isExtractLineCollection = false;
+    }
     int i = 0;
     double? width = 0;
     double? height = 0;
@@ -749,11 +774,15 @@ class PdfTextExtractor {
   List<MatchedItem> _searchInBackground(
     PdfPage page,
     List<String> searchString,
-    TextSearchOption? searchOption,
-  ) {
+    TextSearchOption? searchOption, {
+    String? cachedPageText,
+  }) {
     final List<MatchedItem> result = <MatchedItem>[];
     _isLayout = true;
-    final String pageText = _getText(page);
+    final String pageText = cachedPageText ?? _getText(page);
+    if (identical(_pageSearchRecords?.page, page)) {
+      _pageSearchRecords!.layoutText = pageText;
+    }
     _isLayout = false;
     final bool containsRtl = bidi.Bidi.hasAnyRtl(pageText);
     if (pageText != '') {
@@ -781,11 +810,21 @@ class PdfTextExtractor {
           page.size.height * 1.3333333333333333,
         );
         renderer.pageRotation = _getPageRotation(page);
+        final scope = _pageSearchRecords;
+        final collectSummary = scope?.collectSummary ?? false;
+        renderer.isExtractLineCollection = collectSummary;
+        renderer.collectSearchGlyphs = collectSummary;
         renderer.renderAsImage();
+        renderer.isExtractLineCollection = false;
+        if (collectSummary) {
+          scope!.summaryRenderer = renderer;
+        }
+        final glyphs = collectSummary
+            ? renderer.searchGlyphs : renderer.imageRenderGlyphList;
         String renderedString = '';
         final Map<int, int> combinedGlyphLength = <int, int>{};
-        if (renderer.imageRenderGlyphList.isNotEmpty) {
-          for (final Glyph glyph in renderer.imageRenderGlyphList) {
+        if (glyphs.isNotEmpty) {
+          for (final Glyph glyph in glyphs) {
             final String currentText = glyph.toUnicode;
             if (currentText.length > 1) {
               combinedGlyphLength[renderedString.length] = currentText.length;
@@ -820,7 +859,7 @@ class PdfTextExtractor {
                 }
               });
             }
-            final int glyphListLength = renderer.imageRenderGlyphList.length;
+            final int glyphListLength = glyphs.length;
             for (int i = 0; i < visualOrderIndexes.length; i++) {
               int index = visualOrderIndexes[i];
               if (combinedGlyphLength.isNotEmpty) {
@@ -839,7 +878,7 @@ class PdfTextExtractor {
               }
               if (index < glyphListLength) {
                 visualOrderedTextGlyph.add(
-                  renderer.imageRenderGlyphList[index],
+                  glyphs[index],
                 );
               }
             }
@@ -848,13 +887,13 @@ class PdfTextExtractor {
             renderedString,
           ];
           final List<List<Glyph>?> textGlyphCollection = <List<Glyph>?>[
-            visualOrderedTextGlyph ?? renderer.imageRenderGlyphList,
+            visualOrderedTextGlyph ?? glyphs,
           ];
           if (renderedString.contains('  ') ||
               renderedString.contains('\t\t')) {
             String innerSpaceTrimmedString = renderedString;
             final List<Glyph> innerSpaceTrimmedTextGlyph =
-                (visualOrderedTextGlyph ?? renderer.imageRenderGlyphList)
+                (visualOrderedTextGlyph ?? glyphs)
                     .toList();
             while (innerSpaceTrimmedString.contains('  ') ||
                 innerSpaceTrimmedString.contains('\t\t')) {
@@ -1111,6 +1150,18 @@ class PdfTextExtractor {
   }
 
   PdfRecordCollection? _getRecordCollection(PdfPage page) {
+    final scope = _pageSearchRecords;
+    if (scope != null && identical(scope.page, page)) {
+      if (!scope.loaded) {
+        scope.records = _readRecordCollection(page);
+        scope.loaded = true;
+      }
+      return scope.records;
+    }
+    return _readRecordCollection(page);
+  }
+
+  PdfRecordCollection? _readRecordCollection(PdfPage page) {
     PdfRecordCollection? recordCollection;
     List<int>? combinedData = PdfPageLayerCollectionHelper.getHelper(
       page.layers,

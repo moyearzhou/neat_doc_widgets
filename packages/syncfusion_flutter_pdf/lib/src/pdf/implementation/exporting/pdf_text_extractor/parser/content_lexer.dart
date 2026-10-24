@@ -72,11 +72,15 @@ class ContentLexer {
 
   /// internal method
   bool isLetter(String s) {
-    if (s.contains(RegExp(r'[A-Z]')) || s.contains(RegExp(r'[a-z]'))) {
-      return true;
-    } else {
-      return false;
+    // Content operators use ASCII letters. Avoid allocating two regular
+    // expressions per token; retain the original "any letter" string behavior.
+    for (int i = 0; i < s.length; i++) {
+      final int code = s.codeUnitAt(i) | 0x20;
+      if (code >= 0x61 && code <= 0x7a) {
+        return true;
+      }
     }
+    return false;
   }
 
   void _resetToken() {

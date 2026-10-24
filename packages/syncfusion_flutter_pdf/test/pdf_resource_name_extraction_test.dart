@@ -14,6 +14,7 @@ import 'package:syncfusion_flutter_pdf/src/pdf/implementation/primitives/pdf_str
 Uint8List _fixture({
   bool escapedDictionary = false,
   bool escapedOperand = false,
+  bool repeatForm = false,
 }) {
   String dictionaryName(String name) =>
       escapedDictionary ? name.replaceAll('-', '#2d') : name;
@@ -25,7 +26,11 @@ Uint8List _fixture({
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /XObject << /${dictionaryName('Outer-1')} 6 0 R >> >> /Contents 4 0 R >>',
-    stream('q /${operandName('Outer-1')} Do Q', ''),
+    stream(
+      'q /${operandName('Outer-1')} Do Q'
+      '${repeatForm ? ' q 1 0 0 1 0 -50 cm /${operandName('Outer-1')} Do Q' : ''}',
+      '',
+    ),
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     stream(
       'q /${operandName('Inner-1')} Do Q',
@@ -59,6 +64,36 @@ Uint8List _fixture({
 }
 
 void main() {
+  test('shared search geometry preserves separate nested Form placements', () {
+    final bytes = _fixture(repeatForm: true);
+    final baseline = PdfDocument(inputBytes: bytes);
+    final document = PdfDocument(inputBytes: bytes);
+    addTearDown(baseline.dispose);
+    addTearDown(document.dispose);
+    final legacy = PdfTextExtractor(baseline);
+    final expected = legacy.findText(['Hello']);
+    final lines = legacy.extractTextLines();
+    expect(expected, hasLength(2));
+    expect(expected.first.bounds, isNot(expected.last.bounds));
+    final extractor = PdfTextExtractor(document);
+    for (var i = 0; i < 3; i++) {
+      final result = extractor.searchPage(['Hello'], pageIndex: 0);
+      expect(result.matches.map((m) => m.bounds), expected.map((m) => m.bounds));
+      expect(result.textLines.map((l) => l.text), lines.map((l) => l.text));
+      expect(result.textLines.map((l) => l.bounds), lines.map((l) => l.bounds));
+      expect(
+        result.textLines.expand((l) => l.wordCollection).expand((w) => w.glyphs)
+            .map((g) => [g.text, g.bounds]),
+        lines.expand((l) => l.wordCollection).expand((w) => w.glyphs)
+            .map((g) => [g.text, g.bounds]),
+      );
+    }
+    final reopened = PdfDocument(inputBytes: document.saveSync());
+    addTearDown(reopened.dispose);
+    expect(PdfTextExtractor(reopened).findText(['Hello']).map((m) => m.bounds),
+        expected.map((m) => m.bounds));
+  });
+
   test(
     'text extraction skips image payload without poisoning normal loading',
     () {
@@ -236,7 +271,21 @@ void main() {
             isTrue,
           );
           // The same dictionary also feeds search and plain-text extraction.
-          expect(PdfTextExtractor(document).findText(['Hello']), hasLength(1));
+          final extractor = PdfTextExtractor(document);
+          final legacy = extractor.findText(['Hello']);
+          expect(legacy, hasLength(1));
+          final reused = extractor.searchPage(['Hello'], pageIndex: 0);
+          expect(
+            reused.matches.map((m) => m.bounds),
+            legacy.map((m) => m.bounds),
+          );
+          expect(
+            reused.textLines
+                .expand((l) => l.wordCollection)
+                .expand((w) => w.glyphs)
+                .map((g) => g.bounds),
+            actual.map((g) => g.bounds),
+          );
           expect(
             PdfTextExtractor(document).extractText(),
             contains('Hello PDF'),

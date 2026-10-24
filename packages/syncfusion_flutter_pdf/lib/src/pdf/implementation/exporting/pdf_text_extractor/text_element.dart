@@ -363,13 +363,12 @@ class TextElement {
               ).getCharWidthInternal(character) *
               PdfFontHelper.characterSizeMultiplier;
         }
-        final MatrixHelper identity = MatrixHelper.identity.clone();
-        identity.scale(0.01, 0.01, 0.0, 0.0);
-        identity.translate(0.0, 1.0);
+        // Same glyph normalization; no scale/translate temporary matrices.
+        final MatrixHelper identity = MatrixHelper(0.01, 0, 0, 0.01, 0, 1);
         transformations._pushTransform(identity * glyph.transformMatrix);
         final MatrixHelper transform = g.transformMatrix!;
-        MatrixHelper matrix = transform.clone();
-        matrix = matrix * transformations.currentTransform!.clone();
+        MatrixHelper matrix = transform;
+        matrix = matrix * transformations.currentTransform!;
         g.transformMatrix = matrix;
         double? tempFontSize = 0;
         if (glyph.transformMatrix.m11 > 0) {
@@ -626,13 +625,12 @@ class TextElement {
                   ).getCharWidthInternal(character) *
                   PdfFontHelper.characterSizeMultiplier;
             }
-            final MatrixHelper identity = MatrixHelper.identity.clone();
-            identity.scale(0.01, 0.01, 0.0, 0.0);
-            identity.translate(0.0, 1.0);
+            // Same glyph normalization; no scale/translate temporary matrices.
+            final MatrixHelper identity = MatrixHelper(0.01, 0, 0, 0.01, 0, 1);
             transformations._pushTransform(identity * glyph.transformMatrix);
             final MatrixHelper transform = g.transformMatrix!;
-            MatrixHelper matrix = transform.clone();
-            matrix = matrix * transformations.currentTransform!.clone();
+            MatrixHelper matrix = transform;
+            matrix = matrix * transformations.currentTransform!;
             g.transformMatrix = matrix;
             double? tempFontSize = 0;
             if (glyph.transformMatrix.m11 > 0) {
@@ -881,13 +879,13 @@ class TextElement {
     if (glyphChar == ' ') {
       glyph.wordSpacing = wordSpacing!;
     }
-    final MatrixHelper identity = MatrixHelper(1, 0, 0, 1, 0, 0);
-    identity.scale(0.01, 0.01, 0.0, 0.0);
-    identity.translate(0.0, 1.0);
+    // Same glyph normalization; no scale/translate temporary matrices.
+    final MatrixHelper identity = MatrixHelper(0.01, 0, 0, 0.01, 0, 1);
     transformations._pushTransform(identity * glyph.transformMatrix);
     final MatrixHelper transform = g.transformMatrix!;
-    MatrixHelper matrix = transform.clone();
-    matrix *= transformations.currentTransform!.clone();
+    // Multiplication creates a fresh matrix and does not mutate its operands.
+    MatrixHelper matrix = transform;
+    matrix *= transformations.currentTransform!;
     g.transformMatrix = matrix;
     if (!structure.isMappingDone) {
       if (cidToGidReverseMapTable != null &&
@@ -1054,13 +1052,13 @@ class TextElement {
       systemFontGlyph = defaultGlyphWidth! * charSizeMultiplier;
     }
     gly.width = (systemFontGlyph == null) ? 0 : systemFontGlyph;
-    final MatrixHelper identity = MatrixHelper(1, 0, 0, 1, 0, 0);
-    identity.scale(0.01, 0.01, 0.0, 0.0);
-    identity.translate(0.0, 1.0);
+    // Same glyph normalization; no scale/translate temporary matrices.
+    final MatrixHelper identity = MatrixHelper(0.01, 0, 0, 0.01, 0, 1);
     transformations._pushTransform(identity * gly.transformMatrix);
     final MatrixHelper transform = g.transformMatrix!;
-    MatrixHelper matrix = transform.clone();
-    matrix = matrix * transformations.currentTransform!.clone();
+    // Multiplication creates a fresh matrix and does not mutate its operands.
+    MatrixHelper matrix = transform;
+    matrix = matrix * transformations.currentTransform!;
     g.transformMatrix = matrix;
     double? tempFontSize = 0;
     if (gly.transformMatrix.m11 > 0) {
@@ -1127,6 +1125,7 @@ class TextElement {
     if (isExtractTextData && gly.toUnicode.length != 1) {
       for (int i = 0; i < gly.toUnicode.length - 1; i++) {
         final Glyph emptyGlyph = Glyph();
+        emptyGlyph.isTextExtractionPadding = true;
         emptyGlyph.boundingRect = Rect.fromLTWH(
           gly.boundingRect.right,
           gly.boundingRect.top,
@@ -1196,7 +1195,7 @@ class TransformationStack {
   //Implementation
   void _pushTransform(MatrixHelper transformMatrix) {
     transformStack.addLast(transformMatrix);
-    MatrixHelper matrix = MatrixHelper.identity.clone();
+    MatrixHelper matrix = MatrixHelper.identity;
     for (final MatrixHelper current in transformStack) {
       matrix *= current;
     }
@@ -1205,7 +1204,7 @@ class TransformationStack {
 
   void _popTransform() {
     transformStack.removeLast();
-    MatrixHelper matrix = MatrixHelper.identity.clone();
+    MatrixHelper matrix = MatrixHelper.identity;
     for (final MatrixHelper current in transformStack) {
       matrix *= current;
     }
