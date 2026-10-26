@@ -21,6 +21,7 @@ import '../theme/theme.dart';
 import 'pdf_detail_region.dart';
 import 'pdf_page_render_surface.dart';
 import 'pdf_raster_buffer.dart';
+import 'pdf_raster_paint_observer.dart';
 import 'pdf_raster_queue.dart';
 import 'pdf_scrollable.dart';
 import 'pdfviewer_canvas.dart';
@@ -82,12 +83,16 @@ class PdfPageView extends StatefulWidget {
     this.onStickyNoteDoubleTapped, {
     this.pageRenderColorFilter,
     this.pageLoadingBuilder,
+    this.onPageRasterized,
+    this.onPageRasterFailed,
     this.rasterQueue,
     this.hoverTextLoader,
   }) : super(key: key);
 
   /// Shared native rendering budget for this viewer.
   final PdfRasterQueue? rasterQueue;
+  final ValueChanged<int>? onPageRasterized;
+  final ValueChanged<int>? onPageRasterFailed;
 
   /// Shared, bounded background preparation for desktop text cursors.
   final HoverTextLoader? hoverTextLoader;
@@ -303,6 +308,7 @@ class PdfPageViewState extends State<PdfPageView> {
   bool _viewportActive = true;
   bool _pageVisible = true;
   bool _baseRasterIsPreview = false;
+  bool _reportedRasterPaint = false;
   double? _scheduledPageZoom;
   String? _semanticLabel;
 
@@ -944,33 +950,49 @@ class PdfPageViewState extends State<PdfPageView> {
   }
 
   Widget _buildPageRaster() {
+    final Widget surface = PdfPageRenderSurface(
+      colorFilter: widget.pageRenderColorFilter,
+      child: Stack(
+        children: <Widget>[
+          SizedBox(
+            width: widget.width,
+            height: widget.height,
+            child: Semantics(label: _semanticLabel, child: _pdfPage),
+          ),
+          if (_tileImageCache != null && _tileImage != null)
+            Positioned(
+              top: _tileImageCache!.visibleRect.top / _heightPercentage,
+              left: _tileImageCache!.visibleRect.left / _heightPercentage,
+              width: _tileImageCache!.visibleRect.width / _heightPercentage,
+              height: _tileImageCache!.visibleRect.height / _heightPercentage,
+              child: SizedBox(
+                width: _tileImageCache!.imageSize.width,
+                height: _tileImageCache!.imageSize.height,
+                child: _tileImage,
+              ),
+            ),
+        ],
+      ),
+    );
     return SizedBox(
       width: widget.width,
       height: widget.height,
-      child: PdfPageRenderSurface(
-        colorFilter: widget.pageRenderColorFilter,
-        child: Stack(
-          children: <Widget>[
-            SizedBox(
-              width: widget.width,
-              height: widget.height,
-              child: Semantics(label: _semanticLabel, child: _pdfPage),
-            ),
-            if (_tileImageCache != null && _tileImage != null)
-              Positioned(
-                top: _tileImageCache!.visibleRect.top / _heightPercentage,
-                left: _tileImageCache!.visibleRect.left / _heightPercentage,
-                width: _tileImageCache!.visibleRect.width / _heightPercentage,
-                height: _tileImageCache!.visibleRect.height / _heightPercentage,
-                child: SizedBox(
-                  width: _tileImageCache!.imageSize.width,
-                  height: _tileImageCache!.imageSize.height,
-                  child: _tileImage,
-                ),
+      child:
+          widget.onPageRasterized == null
+              ? surface
+              : PdfRasterPaintObserver(
+                image: _pdfPage?.image,
+                onPaint: (image) {
+                  if (mounted &&
+                      _pageVisible &&
+                      !_reportedRasterPaint &&
+                      identical(image, _pdfPage?.image)) {
+                    _reportedRasterPaint = true;
+                    widget.onPageRasterized?.call(widget.pageIndex + 1);
+                  }
+                },
+                child: surface,
               ),
-          ],
-        ),
-      ),
     );
   }
 

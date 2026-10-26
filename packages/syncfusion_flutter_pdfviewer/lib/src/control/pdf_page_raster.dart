@@ -110,6 +110,15 @@ extension _PdfPageRaster on PdfPageViewState {
     PdfRasterBuffer? pixels;
     try {
       pixels = await operation;
+      if (pixels == null &&
+          mounted &&
+          _viewportActive &&
+          _pageVisible &&
+          !_rasterizationSuspended &&
+          generation == _rasterGeneration &&
+          _pdfPage == null) {
+        widget.onPageRasterFailed?.call(widget.pageIndex + 1);
+      }
       if (pixels == null ||
           !mounted ||
           !_viewportActive ||
@@ -130,6 +139,14 @@ extension _PdfPageRaster on PdfPageViewState {
       _replacePageRaster(image, imageFactor);
     } catch (_) {
       // Keep the previous bitmap if a native request or pixel decode fails.
+      if (mounted &&
+          _viewportActive &&
+          _pageVisible &&
+          !_rasterizationSuspended &&
+          generation == _rasterGeneration &&
+          _pdfPage == null) {
+        widget.onPageRasterFailed?.call(widget.pageIndex + 1);
+      }
     } finally {
       await pixels?.dispose();
       if (identical(_pageImageOperation, operation)) {

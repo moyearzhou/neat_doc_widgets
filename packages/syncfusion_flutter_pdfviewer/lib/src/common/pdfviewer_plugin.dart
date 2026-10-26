@@ -14,12 +14,21 @@ class PdfViewerPlugin {
   List<dynamic>? _originalWidth;
   String? _documentID;
   String? _tempFilePath;
+  Future<void> _initialization = Future.value();
+  Future<void>? _closing;
 
   /// Initialize the PDF renderer.
-  Future<int> initializePdfRenderer(
-    Uint8List documentBytes,
-    String? password,
-  ) async {
+  Future<int> initializePdfRenderer(Uint8List documentBytes, String? password) {
+    final result = _initialize(documentBytes, password);
+    _initialization = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
+  }
+
+  Future<int> _initialize(Uint8List documentBytes, String? password) async {
+    await _closing;
     _documentID = const Uuid().v1();
     String? pageCount;
     if (_documentID != null) {
@@ -67,7 +76,16 @@ class PdfViewerPlugin {
   }
 
   /// Dispose the rendered pages
-  Future<void> closeDocument() async {
+  Future<void> closeDocument() =>
+      _closing ??= _close().whenComplete(() {
+        _closing = null;
+      });
+
+  Future<void> _close() async {
+    // A reader may be disposed while native initialization is still in flight.
+    // Wait for that attempt before closing/deleting; late init must not leak a handle.
+    final pending = _initialization;
+    await pending;
     imageCache.clear();
     if (_documentID != null) {
       await PdfViewerPlatform.instance.closeDocument(_documentID!);
@@ -82,6 +100,7 @@ class PdfViewerPlugin {
     _originalWidth = null;
     _originalHeight = null;
     _tempFilePath = null;
+    _documentID = null;
   }
 }
 
