@@ -16,6 +16,7 @@ import '../../primitives/pdf_reference_holder.dart';
 import '../../primitives/pdf_stream.dart';
 import '../../primitives/pdf_string.dart';
 import 'font_file2.dart';
+import 'pdf_string_decoder.dart';
 import 'xobject_element.dart';
 
 /// internal class
@@ -1138,6 +1139,12 @@ class FontStructure {
         }
       }
     }
+    // Encoding names are PDF names: #2D and '-' have the same meaning.
+    fontEncoding = fontEncoding?.replaceAllMapped(
+      RegExp(r'#[0-9A-Fa-f]{2}'),
+      (Match m) =>
+          String.fromCharCode(int.parse(m[0]!.substring(1), radix: 16)),
+    );
     if (fontEncoding == 'CMap') {
       fontEncoding = 'Identity-H';
     }
@@ -2591,12 +2598,48 @@ class FontStructure {
     return charvalue;
   }
 
+  // Character codes are not Unicode yet. In particular, D800..DFFF are
+  // valid CIDs and must reach ToUnicode without UTF-16 surrogate conversion.
+  bool get _usesTwoByteCodes => <String>{
+    'Identity-H',
+    'Identity-V',
+    'UniCNS-UCS2-H',
+    'UniKS-UCS2-H',
+    'UniJIS-UCS2-H',
+    'UniGB-UCS2-H',
+  }.contains(fontEncoding);
+
+  String _decodeCompositeToken(String token, List<dynamic> codes) {
+    final List<int> bytes = decodePdfStringBytes(token);
+    final StringBuffer result = StringBuffer();
+    for (int i = 0; i + 1 < bytes.length; i += 2) {
+      final int code = (bytes[i] << 8) | bytes[i + 1];
+      final String mapped =
+          characterMapTable[code.toDouble()] ?? String.fromCharCode(code);
+      codes.add(code);
+      // Selection geometry associates every UTF-16 unit with its source glyph.
+      for (int j = 1; j < mapped.length; j++) {
+        codes.add('combined');
+      }
+      result.write(mapped);
+    }
+    return result.toString();
+  }
+
   /// internal method
   String decodeTextExtraction(
     String textToDecode,
     bool isSameFont, [
     List<dynamic>? charcodes,
   ]) {
+    if (_usesTwoByteCodes) {
+      this.isSameFont = isSameFont;
+      isMappingDone = true;
+      return pdfStringTokens(textToDecode)
+          .where((String t) => t.startsWith('(') || t.startsWith('<'))
+          .map((String t) => _decodeCompositeToken(t, charcodes ?? <dynamic>[]))
+          .join();
+    }
     String decodedText = '';
     String encodedText = textToDecode;
     this.isSameFont = isSameFont;
@@ -2899,6 +2942,21 @@ class FontStructure {
     String textToDecode,
     bool isSameFont,
   ) {
+    if (_usesTwoByteCodes) {
+      this.isSameFont = isSameFont;
+      final Map<List<dynamic>, String> result = <List<dynamic>, String>{};
+      // TJ consumers use a trailing 's' marker to distinguish text from spacing.
+      // Keep it even when the actual word itself ends in 's'.
+      for (final String token in pdfStringTokens(textToDecode)) {
+        final List<dynamic> codes = <dynamic>[];
+        result[codes] =
+            token.startsWith('(') || token.startsWith('<')
+                ? '${_decodeCompositeToken(token, codes)}s'
+                : token;
+      }
+      isMappingDone = true;
+      return result;
+    }
     String decodedText = '';
     String encodedText = textToDecode;
     String listElement;
@@ -4746,6 +4804,14 @@ class FontStructure {
     List<dynamic>? charCodes,
   ]) {
     String decodedText = '';
+    hexEncodedText = hexEncodedText.replaceAll(
+      RegExp(r'[\x00\x09\x0A\x0C\x0D\x20]'),
+      '',
+    );
+    // PDF pads an odd final hex nibble with zero.
+    if (hexEncodedText.length.isOdd) {
+      hexEncodedText += '0';
+    }
     // IsHexaDecimalString = true;
     if (hexEncodedText.isNotEmpty) {
       final PdfName fontType =

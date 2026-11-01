@@ -173,6 +173,9 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.onDocumentLoaded,
+    this.onPageRasterized,
+    this.onPageRasterFailed,
+    this.onDocumentClosed,
     this.enableDoubleTapZooming = true,
     this.enableTextSelection = true,
     this.onTextSelectionChanged,
@@ -253,6 +256,9 @@ class SfPdfViewer extends StatefulWidget {
     this.canShowScrollStatus = true,
     this.onPageChanged,
     this.onDocumentLoaded,
+    this.onPageRasterized,
+    this.onPageRasterFailed,
+    this.onDocumentClosed,
     this.enableDoubleTapZooming = true,
     this.enableTextSelection = true,
     this.onTextSelectionChanged,
@@ -337,6 +343,9 @@ class SfPdfViewer extends StatefulWidget {
     this.onTextSelectionChanged,
     this.onHyperlinkClicked,
     this.onDocumentLoaded,
+    this.onPageRasterized,
+    this.onPageRasterFailed,
+    this.onDocumentClosed,
     this.onDocumentLoadFailed,
     this.onTap,
     this.onFormFieldValueChanged,
@@ -416,6 +425,9 @@ class SfPdfViewer extends StatefulWidget {
     this.onTextSelectionChanged,
     this.onHyperlinkClicked,
     this.onDocumentLoaded,
+    this.onPageRasterized,
+    this.onPageRasterFailed,
+    this.onDocumentClosed,
     this.onDocumentLoadFailed,
     this.onTap,
     this.onFormFieldValueChanged,
@@ -498,6 +510,9 @@ class SfPdfViewer extends StatefulWidget {
     this.onTextSelectionChanged,
     this.onHyperlinkClicked,
     this.onDocumentLoaded,
+    this.onPageRasterized,
+    this.onPageRasterFailed,
+    this.onDocumentClosed,
     this.onDocumentLoadFailed,
     this.onTap,
     this.onFormFieldValueChanged,
@@ -907,6 +922,17 @@ class SfPdfViewer extends StatefulWidget {
   ///
   /// See also: [PdfDocumentLoadedDetails].
   final PdfDocumentLoadedCallback? onDocumentLoaded;
+
+  /// Called once per page after a decoded native raster was painted while visible.
+  /// Unlike onDocumentLoaded this is evidence of display; page numbers are one-based.
+  final ValueChanged<int>? onPageRasterized;
+
+  /// Initial visible-page native render/decode failed. Stale/cancelled work is excluded.
+  final ValueChanged<int>? onPageRasterFailed;
+
+  /// Native document and its temporary file have closed after widget disposal.
+  /// False means release failed; owners must retain files until safe to retry.
+  final ValueChanged<bool>? onDocumentClosed;
 
   /// Called when the document loading fails in [SfPdfViewer].
   ///
@@ -1652,7 +1678,12 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
     _localizations = null;
     imageCache.clear();
     _killTextSearchIsolate();
-    _plugin.closeDocument();
+    unawaited(
+      _plugin.closeDocument().then(
+        (_) => widget.onDocumentClosed?.call(true),
+        onError: (Object _) => widget.onDocumentClosed?.call(false),
+      ),
+    );
     _textExtractionEngine?.dispose();
     _textExtractionEngine = null;
     _decryptionEngine?.dispose();
@@ -3948,21 +3979,23 @@ class SfPdfViewerState extends State<SfPdfViewer> with WidgetsBindingObserver {
                     _handlePdfPagePointerMove,
                     _handlePdfPagePointerUp,
                         isBookmarkViewOpen ? '' : _visiblePageText?.textFor(index),
-                    widget.pageLayoutMode == PdfPageLayoutMode.single,
-                    _textDirection!,
-                    widget.canShowHyperlinkDialog,
-                    widget.enableHyperlinkNavigation,
-                    _isAndroidTV,
-                    widget.canShowPageLoadingIndicator,
-                    widget.canShowSignaturePadDialog,
-                    _handlePageTap,
-                    _pdfViewerController._formFields,
-                    _pdfViewerController._annotations,
-                    _selectedAnnotation,
-                    _onAnnotationSelectionChanged,
-                    _onStickyNoteAnnotationDoubleTapped,
-                    pageRenderColorFilter: widget.pageRenderColorFilter,
-                    pageLoadingBuilder: widget.pageLoadingBuilder,
+                        widget.pageLayoutMode == PdfPageLayoutMode.single,
+                        _textDirection!,
+                        widget.canShowHyperlinkDialog,
+                        widget.enableHyperlinkNavigation,
+                        _isAndroidTV,
+                        widget.canShowPageLoadingIndicator,
+                        widget.canShowSignaturePadDialog,
+                        _handlePageTap,
+                        _pdfViewerController._formFields,
+                        _pdfViewerController._annotations,
+                        _selectedAnnotation,
+                        _onAnnotationSelectionChanged,
+                        _onStickyNoteAnnotationDoubleTapped,
+                        pageRenderColorFilter: widget.pageRenderColorFilter,
+                        pageLoadingBuilder: widget.pageLoadingBuilder,
+                        onPageRasterized: widget.onPageRasterized,
+                        onPageRasterFailed: widget.onPageRasterFailed,
                         rasterQueue: _rasterQueue,
                         hoverTextLoader: _ensureHoverTextLoader(),
                   );
