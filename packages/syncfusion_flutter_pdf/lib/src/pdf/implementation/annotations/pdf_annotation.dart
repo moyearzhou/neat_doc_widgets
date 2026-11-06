@@ -754,17 +754,14 @@ class PdfAnnotationHelper {
 
   PdfArray? _getCropOrMediaBox(PdfPage page, PdfArray? cropOrMediaBox) {
     final PdfDictionary dictionary = PdfPageHelper.getHelper(page).dictionary!;
-    if (dictionary.containsKey(PdfDictionaryProperties.cropBox)) {
-      cropOrMediaBox =
-          PdfCrossTable.dereference(dictionary[PdfDictionaryProperties.cropBox])
-              as PdfArray?;
-    } else if (dictionary.containsKey(PdfDictionaryProperties.mediaBox)) {
-      cropOrMediaBox =
-          PdfCrossTable.dereference(
-                dictionary[PdfDictionaryProperties.mediaBox],
-              )
-              as PdfArray?;
-    }
+    // Page boxes may be inherited from the page tree, just like page size.
+    cropOrMediaBox = (dictionary.getValue(
+      PdfDictionaryProperties.cropBox,
+      PdfDictionaryProperties.parent,
+    ) ?? dictionary.getValue(
+      PdfDictionaryProperties.mediaBox,
+      PdfDictionaryProperties.parent,
+    )) as PdfArray?;
     return cropOrMediaBox;
   }
 
