@@ -236,6 +236,9 @@ class PdfTextMarkupAnnotationHelper extends PdfAnnotationHelper {
   //Implementation
   /// Internal method.
   void setQuadPoints(Size pageSize) {
+    final helper = PdfPageHelper.getHelper(page!);
+    final box = helper.cropBox.isEmpty ? helper.mediaBox : helper.cropBox;
+    final origin = box.topLeft;
     if (!isLoadedAnnotation) {
       final double pageHeight = pageSize.height;
       final PdfMargins margins = obtainMargin()!;
@@ -268,6 +271,11 @@ class PdfTextMarkupAnnotationHelper extends PdfAnnotationHelper {
             (locationX + _boundsCollection[i].width) + margins.left;
         textQuadLocation[7 + (i * 8)] = textQuadLocation[5 + (i * 8)];
       }
+      // QuadPoints and Rect both use absolute PDF default user space.
+      for (int i = 0; i < textQuadLocation.length; i += 2) {
+        textQuadLocation[i] += origin.dx;
+        textQuadLocation[i + 1] += origin.dy;
+      }
       points = PdfArray(textQuadLocation);
       dictionary!.setProperty(PdfDictionaryProperties.quadPoints, points);
     } else {
@@ -289,6 +297,10 @@ class PdfTextMarkupAnnotationHelper extends PdfAnnotationHelper {
         textQuadLocation[6 + (i * 8)] = locationX + _boundsCollection[i].width;
         textQuadLocation[7 + (i * 8)] = textQuadLocation[5 + (i * 8)];
       }
+      for (int i = 0; i < textQuadLocation.length; i += 2) {
+        textQuadLocation[i] += origin.dx;
+        textQuadLocation[i + 1] += origin.dy;
+      }
       dictionary!.setProperty(
         PdfDictionaryProperties.quadPoints,
         PdfArray(textQuadLocation),
@@ -297,6 +309,9 @@ class PdfTextMarkupAnnotationHelper extends PdfAnnotationHelper {
   }
 
   List<Rect> _obtainBoundsValue() {
+    final helper = PdfPageHelper.getHelper(page!);
+    final box = helper.cropBox.isEmpty ? helper.mediaBox : helper.cropBox;
+    final origin = box.topLeft;
     final List<Rect> collection = <Rect>[];
     if (dictionary!.containsKey(PdfDictionaryProperties.quadPoints)) {
       final IPdfPrimitive? points = PdfCrossTable.dereference(
@@ -329,7 +344,7 @@ class PdfTextMarkupAnnotationHelper extends PdfAnnotationHelper {
           width = sqrt((x * x) + (y * y));
           final double m = [q1, q3, q5, q7].reduce(min);
           final double n = page!.size.height - [q2, q4, q6, q8].reduce(max);
-          final Rect rect = Rect.fromLTWH(m, n, width, height);
+          final Rect rect = Rect.fromLTWH(m - origin.dx, n + origin.dy, width, height);
           collection.add(rect);
         }
       }
