@@ -5,7 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:syncfusion_flutter_pdf/src/pdf/implementation/exporting/pdf_text_extractor/pdf_string_decoder.dart';
 
-Uint8List fixture(String content, {String encoding = 'Identity-H'}) {
+Uint8List fixture(
+  String content, {
+  String encoding = 'Identity-H',
+  bool toUnicode = true,
+}) {
   String stream(String s) =>
       '<< /Length ${latin1.encode(s).length} >>\nstream\n$s\nendstream';
   final objects = <String>[
@@ -13,10 +17,10 @@ Uint8List fixture(String content, {String encoding = 'Identity-H'}) {
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
     stream('BT /F1 18 Tf 30 200 Td $content ET'),
-    '<< /Type /Font /Subtype /Type0 /BaseFont /Test /Encoding /$encoding /DescendantFonts [6 0 R] /ToUnicode 7 0 R >>',
+    '<< /Type /Font /Subtype /Type0 /BaseFont /Test /Encoding /$encoding /DescendantFonts [6 0 R] ${toUnicode ? '/ToUnicode 7 0 R' : ''} >>',
     '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Test /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 500 >>',
     stream(
-      '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Test def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 9 beginbfchar <0000> <25A1> <0041> <0041> <0042> <0042> <0141> <0043> <0142> <0044> <D800> <0045> <005C> <005C> <0073> <0073> <0043> <00660069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end',
+      '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Test def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 10 beginbfchar <BEDF> <0043> <0000> <25A1> <0041> <0041> <0042> <0042> <0141> <0043> <0142> <0044> <D800> <0045> <005C> <005C> <0073> <0073> <0043> <00660069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end',
     ),
   ];
   final bytes = BytesBuilder()..add(latin1.encode('%PDF-1.4\n'));
@@ -41,6 +45,57 @@ Uint8List fixture(String content, {String encoding = 'Identity-H'}) {
 }
 
 void main() {
+  for (final encoding in ['GBK-EUC-H', 'GBK-EUC-V']) {
+    for (final content in [
+      '<41424320BEDFCCE5BFB4B5BDC1CBCAB2C3B4> Tj',
+      '[(ABC ) <BEDFCCE5BFB4B5BDC1CBCAB2C3B4>] TJ',
+      r'(ABC \276\337\314\345\277\264\265\275\301\313\312\262\303\264) Tj',
+    ]) {
+      test('$encoding mixed ASCII and GBK $content', () {
+        final doc = PdfDocument(
+          inputBytes: fixture(content, encoding: encoding, toUnicode: false),
+        );
+        addTearDown(doc.dispose);
+        final extractor = PdfTextExtractor(doc);
+        expect(extractor.extractText(), contains('ABC 具体看到了什么'));
+        expect(
+          extractor.extractTextLines().map((line) => line.text).join(),
+          contains('ABC 具体看到了什么'),
+        );
+        expect(extractor.findText(['具体']), isNotEmpty);
+      });
+    }
+    test('$encoding preserves explicit ToUnicode mapping', () {
+      final doc = PdfDocument(
+        inputBytes: fixture('<BEDF> Tj', encoding: encoding),
+      );
+      addTearDown(doc.dispose);
+      expect(PdfTextExtractor(doc).extractText(), contains('C'));
+    });
+  }
+  test('active GBK book text and selection extraction', () {
+    final path = Platform.environment['PDF_GBK_FIXTURE'];
+    if (path == null) return;
+    final doc = PdfDocument(inputBytes: File(path).readAsBytesSync());
+    addTearDown(doc.dispose);
+    final extractor = PdfTextExtractor(doc);
+    expect(
+      extractor.extractText(startPageIndex: 90, endPageIndex: 90),
+      contains('具体看到了什么'),
+    );
+    expect(
+      extractor
+          .extractTextLines(startPageIndex: 90, endPageIndex: 90)
+          .map((line) => line.text)
+          .join(),
+      contains('具体看到了什么'),
+    );
+    expect(
+      extractor.findText(['具体看到了什么'], startPageIndex: 90, endPageIndex: 90),
+      isNotEmpty,
+    );
+  });
+
   final String? originalPath = Platform.environment['PDF_CAPTIONING_FIXTURE'];
   test(
     'original captioning paper selection and search',

@@ -16,6 +16,7 @@ import '../../primitives/pdf_reference_holder.dart';
 import '../../primitives/pdf_stream.dart';
 import '../../primitives/pdf_string.dart';
 import 'font_file2.dart';
+import 'gbk_decoder.dart';
 import 'pdf_string_decoder.dart';
 import 'xobject_element.dart';
 
@@ -2609,13 +2610,23 @@ class FontStructure {
     'UniGB-UCS2-H',
   }.contains(fontEncoding);
 
+  bool get _usesGbkCodes =>
+      fontEncoding == 'GBK-EUC-H' || fontEncoding == 'GBK-EUC-V';
+
   String _decodeCompositeToken(String token, List<dynamic> codes) {
     final List<int> bytes = decodePdfStringBytes(token);
     final StringBuffer result = StringBuffer();
-    for (int i = 0; i + 1 < bytes.length; i += 2) {
-      final int code = (bytes[i] << 8) | bytes[i + 1];
+    for (int i = 0; i < bytes.length;) {
+      // GBK mixes single-byte ASCII with double-byte characters. Identity CMaps
+      // remain fixed-width; ToUnicode always takes priority over the fallback.
+      final bool single = _usesGbkCodes && bytes[i] <= 0x80;
+      if (!single && i + 1 >= bytes.length) {
+        break;
+      }
+      final int code = single ? bytes[i++] : (bytes[i++] << 8) | bytes[i++];
       final String mapped =
-          characterMapTable[code.toDouble()] ?? String.fromCharCode(code);
+          characterMapTable[code.toDouble()] ??
+          (_usesGbkCodes ? decodeGbkCode(code) : String.fromCharCode(code));
       codes.add(code);
       // Selection geometry associates every UTF-16 unit with its source glyph.
       for (int j = 1; j < mapped.length; j++) {
@@ -2632,7 +2643,7 @@ class FontStructure {
     bool isSameFont, [
     List<dynamic>? charcodes,
   ]) {
-    if (_usesTwoByteCodes) {
+    if (_usesTwoByteCodes || _usesGbkCodes) {
       this.isSameFont = isSameFont;
       isMappingDone = true;
       return pdfStringTokens(textToDecode)
@@ -2942,7 +2953,7 @@ class FontStructure {
     String textToDecode,
     bool isSameFont,
   ) {
-    if (_usesTwoByteCodes) {
+    if (_usesTwoByteCodes || _usesGbkCodes) {
       this.isSameFont = isSameFont;
       final Map<List<dynamic>, String> result = <List<dynamic>, String>{};
       // TJ consumers use a trailing 's' marker to distinguish text from spacing.
