@@ -88,8 +88,33 @@ namespace pdfviewer
 
     std::string docID = std::get<std::string>(documentID->second);
     std::shared_ptr<PdfDocument> pdfDoc = initializePdfRenderer(bytes, password.value_or(""), docID);
+    if (pdfDoc->pdfDocument == nullptr)
+    {
+      result->Error("PdfLoadError", "Unable to load PDF document");
+      return;
+    }
     int pageCount = FPDF_GetPageCount(pdfDoc->pdfDocument);
     result->Success(flutter::EncodableValue(std::to_string(pageCount)));
+  }
+
+  void LoadPdfFromFile(
+      const flutter::MethodCall<flutter::EncodableValue>& method_call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
+  {
+    const auto& arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
+    const auto& path = std::get<std::string>(arguments.at(flutter::EncodableValue("path")));
+    const auto& id = std::get<std::string>(arguments.at(flutter::EncodableValue("documentID")));
+    const auto password = arguments.find(flutter::EncodableValue("password"));
+    const std::string value = password == arguments.end() || password->second.IsNull()
+        ? "" : std::get<std::string>(password->second);
+    auto document = loadPdfFromFile(path, value, id);
+    if (document->pdfDocument == nullptr)
+    {
+      result->Error("PdfLoadError", "Unable to open PDF file");
+      return;
+    }
+    result->Success(flutter::EncodableValue(
+        std::to_string(FPDF_GetPageCount(document->pdfDocument))));
   }
 
   /// Gets the PDF pages height
@@ -194,9 +219,21 @@ namespace pdfviewer
     }
     FPDF_DOCUMENT document = documentPtr->pdfDocument;
     FPDF_PAGE page = FPDF_LoadPage(document, index - 1);
+    if (page == nullptr || width <= 0 || height <= 0)
+    {
+      if (page != nullptr) FPDF_ClosePage(page);
+      result->Error("PdfRenderError", "Invalid PDF page or bitmap dimensions");
+      return;
+    }
    
     // Create empty bitmap and render page onto it
     auto bitmap = FPDFBitmap_Create(width, height, 0);
+    if (bitmap == nullptr)
+    {
+      FPDF_ClosePage(page);
+      result->Error("PdfRenderError", "Unable to allocate PDF bitmap");
+      return;
+    }
     FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
     FPDF_RenderPageBitmap(bitmap, page, 0, 0, width, height, 0, FPDF_LCD_TEXT | FPDF_REVERSE_BYTE_ORDER);
 
@@ -231,14 +268,32 @@ namespace pdfviewer
     auto y = std::get<double>(yArgument->second);
     int width = (int)std::get<double>(widthArgument->second);
     int height = (int)std::get<double>(heightArgument->second);
-    FPDF_DOCUMENT document = getPdfDocument(id)->pdfDocument;
+    auto documentPtr = getPdfDocument(id);
+    if (documentPtr == nullptr)
+    {
+      result->Error("Error", "Document not found");
+      return;
+    }
+    FPDF_DOCUMENT document = documentPtr->pdfDocument;
     FPDF_PAGE page = FPDF_LoadPage(document, pageNumber - 1);
+    if (page == nullptr || width <= 0 || height <= 0)
+    {
+      if (page != nullptr) FPDF_ClosePage(page);
+      result->Error("PdfRenderError", "Invalid PDF page or bitmap dimensions");
+      return;
+    }
 
     FS_MATRIX matrix = {(float)scale, 0, 0, (float)scale, (float)(-x * scale), (float)(-y * scale)};
     FS_RECTF rect = {0,0, (float)(width * scale), (float)(height * scale)};
 
     // Create empty bitmap and render page onto it
     auto bitmap = FPDFBitmap_Create(width, height, 0);
+    if (bitmap == nullptr)
+    {
+      FPDF_ClosePage(page);
+      result->Error("PdfRenderError", "Unable to allocate PDF bitmap");
+      return;
+    }
     FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
     FPDF_RenderPageBitmapWithMatrix(bitmap, page, &matrix, &rect, FPDF_LCD_TEXT | FPDF_REVERSE_BYTE_ORDER);
     uint8_t *scanArg = static_cast<uint8_t *>(FPDFBitmap_GetBuffer(bitmap));
@@ -257,7 +312,11 @@ namespace pdfviewer
       const flutter::MethodCall<flutter::EncodableValue> &method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
   {
-    if (method_call.method_name().compare("initializePdfRenderer") == 0)
+    if (method_call.method_name().compare("loadPdfFromFile") == 0)
+    {
+      LoadPdfFromFile(method_call, std::move(result));
+    }
+    else if (method_call.method_name().compare("initializePdfRenderer") == 0)
     {
       InitializePdfRenderer(method_call, std::move(result));
     }

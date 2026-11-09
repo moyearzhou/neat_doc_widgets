@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.14)
+project(pdfviewer_file_loading_test LANGUAGES CXX)
+enable_testing()
+set(PLUGIN_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
+add_executable(pdfviewer_file_loading_test pdfviewer_file_loading_test.cpp "${PLUGIN_ROOT}/pdfviewer.cpp")
+target_compile_features(pdfviewer_file_loading_test PRIVATE cxx_std_17)
+target_compile_definitions(pdfviewer_file_loading_test PRIVATE NOMINMAX)
+target_include_directories(pdfviewer_file_loading_test PRIVATE "${PLUGIN_ROOT}" "${PLUGIN_ROOT}/include/pdfium")
+target_link_libraries(pdfviewer_file_loading_test PRIVATE "${PLUGIN_ROOT}/include/pdfium/x64/lib/pdfium.dll.lib")
+add_custom_command(TARGET pdfviewer_file_loading_test POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PLUGIN_ROOT}/include/pdfium/x64/bin/pdfium.dll" "$<TARGET_FILE_DIR:pdfviewer_file_loading_test>")
+# Supply a directory containing real regression PDFs; no private documents are tracked.
+set(PDF_TEST_FIXTURE_DIR "" CACHE PATH "Directory containing regression PDFs")
+if(PDF_TEST_FIXTURE_DIR)
+  add_test(NAME unicode_file_loading COMMAND pdfviewer_file_loading_test "${PDF_TEST_FIXTURE_DIR}")
+endif()

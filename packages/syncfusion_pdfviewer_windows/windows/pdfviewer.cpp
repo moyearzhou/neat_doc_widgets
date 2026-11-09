@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <string>
 #include <map>
+#include <filesystem>
+#include <limits>
 
 #include "pdfviewer.h"
 
@@ -40,8 +42,6 @@ namespace pdfviewer
     std::shared_ptr<PdfDocument> documentPtr = getPdfDocument(docID);
     if (documentPtr == nullptr)
         return;
-    FPDF_DOCUMENT document = documentPtr->pdfDocument;
-    FPDF_CloseDocument(document);
     documentRepo.erase(docID);
   }
 
@@ -53,17 +53,66 @@ namespace pdfviewer
     }
 
     std::shared_ptr<PdfDocument> doc = std::make_shared<PdfDocument>(data, password, docID);
-    documentRepo[docID] = doc;
+    if (doc->pdfDocument != nullptr)
+      documentRepo[docID] = doc;
 
     return doc;
+  }
+
+  std::shared_ptr<PdfDocument> loadPdfFromFile(std::string filePath, std::string password, std::string docID)
+  {
+    if (documentRepo.empty())
+      FPDF_InitLibraryWithConfig(nullptr);
+
+    auto doc = std::make_shared<PdfDocument>(filePath, password, docID);
+    if (doc->pdfDocument != nullptr)
+      documentRepo[docID] = doc;
+    return doc;
+  }
+
+  namespace
+  {
+    int ReadFileBlock(void* parameter, unsigned long position,
+                      unsigned char* buffer, unsigned long size)
+    {
+      FILE* file = static_cast<FILE*>(parameter);
+      return _fseeki64(file, position, SEEK_SET) == 0 &&
+             fread(buffer, 1, size, file) == size;
+    }
   }
 
   PdfDocument::PdfDocument(std::vector<uint8_t> dataRef, std::string password, std::string id) : documentID{id}
   {
     data.swap(dataRef);
-
     pdfDocument = FPDF_LoadMemDocument64(data.data(), data.size(), password.c_str());
   }
 
-  PdfDocument::~PdfDocument() {}
+  PdfDocument::PdfDocument(std::string filePath, std::string password, std::string id) : documentID{id}
+  {
+    // MethodChannel strings are UTF-8; PDFium's narrow Windows file API uses
+    // the system code page. Open with the Unicode CRT API instead, and retain
+    // a random-access callback so large PDFs are not copied into memory.
+    const auto path = std::filesystem::u8path(filePath);
+    if (_wfopen_s(&file, path.c_str(), L"rb") != 0)
+      return;
+    if (_fseeki64(file, 0, SEEK_END) != 0)
+      return;
+    const auto length = _ftelli64(file);
+    // FPDF_FILEACCESS uses unsigned long (32 bits on Windows); do not truncate.
+    if (length <= 0 || length > (std::numeric_limits<unsigned long>::max)())
+      return;
+    fileAccess.m_FileLen = static_cast<unsigned long>(length);
+    fileAccess.m_GetBlock = ReadFileBlock;
+    fileAccess.m_Param = file;
+    pdfDocument = FPDF_LoadCustomDocument(&fileAccess, password.c_str());
+  }
+
+  PdfDocument::~PdfDocument()
+  {
+    // PDFium may still read the file while closing the document.
+    if (pdfDocument != nullptr)
+      FPDF_CloseDocument(pdfDocument);
+    if (file != nullptr)
+      fclose(file);
+  }
 }
