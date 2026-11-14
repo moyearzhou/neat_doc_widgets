@@ -30,6 +30,8 @@ android {
         namespace 'com.syncfusion.flutter.pdfviewer'
     }
     compileSdkVersion 36
+    // Match the Android host instead of relying on AGP's default NDK version.
+    ndkVersion "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

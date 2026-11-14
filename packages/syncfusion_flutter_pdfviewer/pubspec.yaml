@@ -69,12 +69,12 @@ dependencies:
   syncfusion_pdfviewer_macos:
     git:
       url: https://github.com/moyearzhou/neat_doc_widgets.git
-      ref: feat/pdfviewer-performance-33.1.47
+      ref: v-0.2.3-33.1.47
       path: packages/syncfusion_pdfviewer_macos
   syncfusion_pdfviewer_windows:
     git:
       url: https://github.com/moyearzhou/neat_doc_widgets.git
-      ref: feat/pdfviewer-performance-33.1.47
+      ref: v-0.2.3-33.1.47
       path: packages/syncfusion_pdfviewer_windows
   syncfusion_pdfviewer_linux: ^33.1.47
   syncfusion_flutter_core: ^33.1.47
@@ -82,7 +82,7 @@ dependencies:
   syncfusion_flutter_pdf:
     git:
       url: https://github.com/moyearzhou/neat_doc_widgets.git
-      ref: feat/pdfviewer-performance-33.1.47
+      ref: v-0.2.3-33.1.47
       path: packages/syncfusion_flutter_pdf
   syncfusion_flutter_signaturepad: ^33.1.47
 
