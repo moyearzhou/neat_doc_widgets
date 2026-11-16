@@ -1,3 +1,13 @@
+## ZotPaper private pub distribution
+
+```yaml
+syncfusion_flutter_pdf:
+  hosted: https://pub.zotpaper.cn
+  version: 33.2.13-zotpaper.1
+```
+
+This package preserves the runtime source of ZotPaper's standard release baseline. Use the exact version for this fork; platform variants must be selected explicitly. See UPSTREAM.md for provenance. Original Syncfusion licensing still applies; private hosting does not replace a valid upstream license.
+
 ![syncfusion_flutter_pdf_banner](https://cdn.syncfusion.com/content/images/FTControl/Flutter-PDF-Banner.png)
 
 # Flutter PDF library

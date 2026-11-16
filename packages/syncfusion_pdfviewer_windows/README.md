@@ -1,3 +1,13 @@
+## ZotPaper private pub distribution
+
+```yaml
+syncfusion_pdfviewer_windows:
+  hosted: https://pub.zotpaper.cn
+  version: 33.1.47-zotpaper.1
+```
+
+This package preserves the runtime source of ZotPaper's standard release baseline. Use the exact version for this fork; platform variants must be selected explicitly. See UPSTREAM.md for provenance. Original Syncfusion licensing still applies; private hosting does not replace a valid upstream license.
+
 ﻿# Flutter PDF Viewer Windows
 
 The Windows implementation of [Syncfusion® Flutter PDF Viewer](https://pub.dev/packages/syncfusion_flutter_pdfviewer) plugin.

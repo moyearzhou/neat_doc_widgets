@@ -2,3 +2,28 @@
 
 lib/src/test/*
 
+
+/.dart_tool/
+/build/
+/coverage/
+/example/
+/test/
+/doc/
+/pubspec.lock
+/pubspec_overrides.yaml
+/.flutter-plugins
+/.flutter-plugins-dependencies
+/.fvmrc
+/.idea/
+/.vscode/
+**/.cxx/
+**/.gradle/
+**/build/
+**/oh_modules/
+**/node_modules/
+**/local.properties
+**/.test/
+**/test/
+**/oh-package-lock.json5
+*.log
+.DS_Store
