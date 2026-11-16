@@ -1,6 +1,8 @@
 name: syncfusion_flutter_pdfviewer
 description: Flutter PDF Viewer library is used to display a PDF document seamlessly and efficiently.
-version: 33.1.47
+version: 33.1.47-zotpaper-ohos.1
+publish_to: https://pub.zotpaper.cn
+repository: https://github.com/moyearzhou/neat_doc_widgets
 homepage: https://github.com/syncfusion/flutter-widgets/tree/master/packages/syncfusion_flutter_pdfviewer
 
 screenshots:
@@ -72,12 +74,10 @@ dependencies:
   syncfusion_pdfviewer_windows: ^33.1.47
   syncfusion_pdfviewer_linux: ^33.1.47
   syncfusion_flutter_core: ^33.1.47
-  # Keep the PDF source identical to the host override when consumed from Git.
+  # Use the same private PDF kernel on standard and OHOS hosts.
   syncfusion_flutter_pdf:
-    git:
-      url: https://github.com/moyearzhou/neat_doc_widgets.git
-      ref: v-0.2.3-33.1.47-ohos
-      path: packages/syncfusion_flutter_pdf
+    hosted: https://pub.zotpaper.cn
+    version: 33.2.13-zotpaper.1
   syncfusion_flutter_signaturepad: ^33.1.47
 
 dev_dependencies:
