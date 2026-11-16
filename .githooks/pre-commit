@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+git diff --cached --check
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+if printf '%s\n' "$staged" | grep -Eq '(^|/)(\.DS_Store|\.idea/|\.vscode/|build/|coverage/|\.dart_tool/|node_modules/|Pods/|DerivedData/)'; then
+  printf '%s\n' '[FAIL] Local or generated artifacts must not be committed.' >&2
+  exit 1
+fi
+if printf '%s\n' "$staged" | grep -Eq '(^|/)(\.env(\..*)?|local\.properties|id_rsa|id_ed25519)$|\.(pem|key|p12|jks|keystore)$'; then
+  printf '%s\n' '[FAIL] Secrets and local configuration must not be committed.' >&2
+  exit 1
+fi

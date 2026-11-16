@@ -1,3 +1,8 @@
+## 33.1.47-zotpaper-ohos.1 — 2026-11-16
+
+- Publish the existing ZotPaper ohos source to the private pub registry without runtime changes.
+- Replace cross-repository Git dependencies with explicit private hosted versions where applicable.
+
 ## Unreleased
 
 * No changes.
